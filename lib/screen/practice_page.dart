@@ -1,4 +1,4 @@
-// 刷题页的完整生命周期：
+// 练习页的完整生命周期：
 // 1. 收到 QuestionBankFile 后，把源 json 复制到 App 文档目录；
 // 2. 解析成 QuestionBank，逐题展示；
 // 3. 每题判分后更新内存统计并写回工作副本；
@@ -12,7 +12,7 @@ import '../models/question_bank_file.dart';
 import '../services/question_bank_storage.dart';
 import '../widgets/question_image.dart';
 
-/// 刷题页：加载题库、逐题作答、更新统计并回写文件。
+/// 练习页：加载题库、逐题作答、更新统计并回写文件。
 ///
 /// 页面状态分三类：
 /// - 加载态：_loading / _error / _questions；

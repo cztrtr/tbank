@@ -1,7 +1,7 @@
 /// 一个题库文件。
 ///
-/// 题库管理页只把「文件名 + 完整路径」传给刷题页，
-/// 真正的题目内容由 QuestionBankStorage 在刷题页加载。
+/// 题库管理页只把「文件名 + 完整路径」传给练习页，
+/// 真正的题目内容由 QuestionBankStorage 在练习页加载。
 class QuestionBankFile {
   const QuestionBankFile({required this.name, required this.path});
 

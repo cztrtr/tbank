@@ -11,14 +11,14 @@ import '../services/storage_permission.dart'; // 存储权限检查与申请
 /// 题库管理页：
 /// - 右上角加号添加题库目录；
 /// - 扫描目录里的 .json 文件并列出；
-/// - 点击某个 .json 交给父页面，切到刷题页。
+/// - 点击某个 .json 交给父页面，切到练习页。
 ///
 /// 权限采用按需申请：进页面先尝试扫描，失败时显示“授权并重试”；
 /// 点加号时也会先确保权限，再打开系统目录选择器。
 class QuestionBankPage extends StatefulWidget {
   const QuestionBankPage({super.key, required this.onOpenBank});
 
-  /// 选中题库时通知 MainScreen；由它保存选中项并切到刷题页。
+  /// 选中题库时通知 MainScreen；由它保存选中项并切到练习页。
   final ValueChanged<QuestionBankFile> onOpenBank;
 
   @override
@@ -380,7 +380,7 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
                 children: <Widget>[
                   Expanded(
                     child: OutlinedButton.icon(
-                      // 把选中的题库交给父页面；MainScreen 会切到刷题页
+                      // 把选中的题库交给父页面；MainScreen 会切到练习页
                       onPressed: () => widget.onOpenBank(file),
                       icon: const Icon(Icons.description_outlined),
                       label: Text(

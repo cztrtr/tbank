@@ -9,7 +9,7 @@ import 'question_bank_page.dart';
 /// 应用主框架：底部导航栏 + 四个页面。
 ///
 /// 页面用 IndexedStack 承载，切 tab 不会销毁页面 State，
-/// 因此题库页的扫描结果、刷题页的作答进度都会被保留。
+/// 因此题库页的扫描结果、练习页的作答进度都会被保留。
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
 
@@ -18,12 +18,12 @@ class MainScreen extends StatefulWidget {
 }
 
 class _MainScreenState extends State<MainScreen> {
-  static const int _practiceTabIndex = 2; // 刷题在底部导航里的位置
+  static const int _practiceTabIndex = 2; // 练习在底部导航里的位置
 
   int _currentIndex = 0; // 当前底部导航下标
   QuestionBankFile? _selectedBank; // 当前选中的题库，null 表示还没选
 
-  /// 题库管理页点了某个题库：保存选择并切到刷题页。
+  /// 题库管理页点了某个题库：保存选择并切到练习页。
   void _openBank(QuestionBankFile bank) {
     setState(() {
       _selectedBank = bank;
@@ -34,7 +34,7 @@ class _MainScreenState extends State<MainScreen> {
   @override
   Widget build(BuildContext context) {
     // 每次重建都把最新的选中题库传给 PracticePage，
-    // 这样题库页 emit 新选择后，刷题页能通过 didUpdateWidget 感知。
+    // 这样题库页 emit 新选择后，练习页能通过 didUpdateWidget 感知。
     final pages = <Widget>[
       const HomePage(),
       QuestionBankPage(onOpenBank: _openBank),

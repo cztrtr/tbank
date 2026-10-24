@@ -1,14 +1,14 @@
 # TBank
 
-一个使用 Flutter 编写的本地题库刷题 App。
+一个使用 Flutter 编写的本地题库练习 App。
 
 题库是普通的 `.json` 文件，可以放在手机存储的任意目录；App 负责扫描目录、读取题目、记录每题累计作答/答错次数，并把统计回写到原文件。
 
-> 当前状态：题库管理、刷题（含题目配图）、本地统计、首页打卡卡片与语录卡已实现；ME 还是占位页。
+> 当前状态：题库管理、练习（含题目配图）、本地统计、首页打卡卡片与语录卡已实现；ME 还是占位页。
 
 ## 功能
 
-- 底部导航：`Home` / `题库管理` / `刷题` / `ME`
+- 底部导航：`Home` / `题库管理` / `练习` / `ME`
 - 首页
   - 每次启动从 `assets/images/home_bg/` 随机选择一张背景图，使用 `BoxFit.cover` 等比铺满
   - 顶部居中的圆角正方形打卡卡片（半透明毛玻璃）：显示「打卡」、累计天数、日期
@@ -19,9 +19,9 @@
 - 题库管理
   - 右上角 `+` 调起系统目录选择器
   - 扫描所选目录下的 `.json` 文件
-  - 点击文件进入刷题
+  - 点击文件进入练习
   - 每项右侧的删除按钮只移除 `config.json` 里的目录记录，不会删除目录或题目文件
-- 刷题
+- 练习
   - 单选 `single_choice`
   - 多选 `multiple_choice`
   - 判断 `true_false`
@@ -54,7 +54,7 @@ App 文档目录下的 xxx.json（工作副本）
 回拷到题库文件夹里的原 xxx.json（syncBack）
 ```
 
-这样设计的原因：题目只有约 100 道，整份 JSON 很小，不需要数据库或增量写；所有答题过程中的写入都发生在 App 私有目录，只有最后同步时才碰用户目录，失败也不会影响继续刷题。
+这样设计的原因：题目只有约 100 道，整份 JSON 很小，不需要数据库或增量写；所有答题过程中的写入都发生在 App 私有目录，只有最后同步时才碰用户目录，失败也不会影响继续练习。
 
 ## 目录结构
 
@@ -72,7 +72,7 @@ lib/
 │   ├── main_screen.dart            # 底部导航 + IndexedStack
 │   ├── home_page.dart              # 随机背景 + 打卡卡片
 │   ├── question_bank_page.dart     # 目录选择、扫描、题库列表
-│   ├── practice_page.dart          # 刷题界面与答题逻辑
+│   ├── practice_page.dart          # 练习界面与答题逻辑
 │   └── me_page.dart                # 占位
 └── widgets/
     ├── page_placeholder.dart       # 占位页面（仅 ME 还在用）
@@ -266,18 +266,18 @@ build/app/outputs/flutter-apk/app-release.apk
 | 类 | 说明 |
 | --- | --- |
 | `MainScreen` | 底部导航 + `IndexedStack`，保存当前选中的题库 |
-| `MainScreen._openBank(QuestionBankFile)` | 点击题库后的回调：保存选中项并切到刷题 tab |
+| `MainScreen._openBank(QuestionBankFile)` | 点击题库后的回调：保存选中项并切到练习 tab |
 | `QuestionBankPage(onOpenBank:)` | 扫描目录，点击文件时把 `QuestionBankFile` 交给父级 |
 | `PracticePage(bank:)` | 接收题库并完成加载、答题、统计、回拷 |
 | `PagePlaceholder(title:, icon:)` | ME 的占位页 |
 
 ## 页面切换与状态
 
-- 四个页面放在 `IndexedStack` 里，切 tab 不销毁页面，因此扫描结果和刷题进度会保留；
+- 四个页面放在 `IndexedStack` 里，切 tab 不销毁页面，因此扫描结果和练习进度会保留；
 - `MainScreen` 持有 `_selectedBank`，每次重建把最新的 `bank` 传给 `PracticePage`；
 - `PracticePage` 在 `didUpdateWidget` 里比较 `oldWidget.bank?.path` 和 `widget.bank?.path`，路径变化才重新加载；
-- 题库页通过 `onOpenBank` 回调把选择交给父级，自己不直接操作刷题页；
-- 刷题页用 `_loadToken` 防止旧的异步加载覆盖新加载。
+- 题库页通过 `onOpenBank` 回调把选择交给父级，自己不直接操作练习页；
+- 练习页用 `_loadToken` 防止旧的异步加载覆盖新加载。
 
 ## 继续开发指南
 
