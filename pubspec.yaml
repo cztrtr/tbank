@@ -1,0 +1,41 @@
+name: tbank
+description: "本地题库刷题 App：扫描 JSON 题库、逐题作答、记录并回写每题统计。"
+publish_to: 'none'
+version: 0.1.2+1
+
+environment:
+  sdk: ^3.13.5
+
+dependencies:
+  # 调起系统目录选择器，用来添加题库目录
+  file_picker: ^13.1.0
+  flutter:
+    sdk: flutter
+  # 定位 App 私有目录：config.json 和题库工作副本都放在这里
+  path_provider: ^2.1.6
+  # Android 存储权限。锁定 12.0.1：更高的版本会要求 compileSdk 37，
+  # 而 SDK 里只有 android-37.x 这种小版本平台，会导致构建失败
+  permission_handler: 12.0.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  # 生成启动图标，命令：dart run flutter_launcher_icons
+  flutter_launcher_icons: ^0.14.4
+
+flutter:
+  uses-material-design: true
+  # 随包发布的资源。注意 home_bg 里有单张 23 MB 的图，
+  # 这 40 多 MB 会直接算进安装包体积，瘦身时优先处理这里
+  assets:
+    - assets/images/home_bg/ # 首页随机背景
+    - assets/texts/ # 首页语录卡的文案（quotes.txt）
+
+# 启动图标：由一张 1024x1024 的 PNG 生成各平台尺寸
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/icon/app_icon.png"
+  remove_alpha_ios: true
+  min_sdk_android: 21
