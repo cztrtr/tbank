@@ -63,11 +63,12 @@ lib/
 ├── main.dart                       # 入口、主题、启动时加载配置
 ├── models/
 │   ├── question_bank.dart          # 题库/题目/选项/统计/题型枚举
-│   └── question_bank_file.dart     # 题库文件（名称 + 路径）
+│   └── question_bank_file.dart     # 题库文件（名称 + 引用 + 所属目录）
 ├── services/
 │   ├── app_config.dart             # config.json 读写、题库目录全局 notifier
-│   ├── question_bank_storage.dart  # 复制/读取/保存/回拷题库文件
-│   └── storage_permission.dart     # Android 存储权限检查与申请
+│   ├── question_bank_storage.dart  # 读取/保存/回拷题库文件
+│   ├── bank_io.dart                # 存储访问统一入口（SAF / 文件路径）
+│   └── saf.dart                    # Android SAF 通道封装
 ├── screen/
 │   ├── main_screen.dart            # 底部导航 + IndexedStack
 │   ├── home_page.dart              # 随机背景 + 打卡卡片
@@ -248,18 +249,41 @@ build/app/outputs/flutter-apk/app-release.apk
 
 | 成员 | 说明 |
 | --- | --- |
-| `QuestionBankStorage(sourcePath:, fileName:)` | 绑定一个源题库文件 |
+| `QuestionBankStorage(file:)` | 绑定一个题库文件（`QuestionBankFile`） |
 | `load()` | 复制源文件到文档目录，读取并解析成 `QuestionBank` |
 | `save(QuestionBank)` | 把整份题库写回工作副本，内部串行队列 |
 | `syncBack()` | 把工作副本回拷到源文件，返回是否成功 |
 | `workingPath` | 工作副本路径，调试用 |
 
-### StoragePermission（`lib/services/storage_permission.dart`）
+### Saf（`lib/services/saf.dart`）
+
+Android Storage Access Framework 的 Dart 封装，对应原生 `tbank/saf` 通道
+（实现见 `android/app/src/main/kotlin/com/example/tbank/MainActivity.kt`）。
+所有 IO 在原生线程池执行后切回主线程，不阻塞 UI。
 
 | 成员 | 说明 |
 | --- | --- |
-| `isGranted()` | 只检查是否已有权限，不弹窗 |
-| `ensure(context)` | 无权限时弹说明并跳系统设置，返回最终是否可用 |
+| `Saf.isSupported` | 是否 Android；桌面端为 false，走文件路径 |
+| `Saf.pickDirectory()` | 弹系统目录选择器，返回可跨重启的 tree URI；取消返回 null |
+| `Saf.listChildren(uri, extension:)` | 列出目录下的一级文件 |
+| `Saf.readText(uri)` / `Saf.writeText(uri, text)` | 读写 UTF-8 文本，写入用 `wt` 模式会截断旧内容 |
+| `Saf.readChildBytes(dirUri, name)` | 按文件名读子文件字节，题目配图用 |
+| `Saf.releasePermission(uri)` | 释放目录授权 |
+| `Saf.hasPersistedPermission(uri)` | 检查授权是否仍有效 |
+
+### BankIo（`lib/services/bank_io.dart`）
+
+存储访问的统一入口，把「SAF URI」和「桌面文件路径」收敛成同一套 API。
+判断依据只有一条：引用是否以 `content://` 开头。
+
+| 成员 | 说明 |
+| --- | --- |
+| `listJsonFiles(dirRef)` | 列出目录下的 `.json`，两种存储都支持 |
+| `readText(fileRef)` / `writeText(fileRef, text)` | 读写题库 JSON，读取时自动去掉 BOM |
+| `readSiblingBytes(dirRef, name)` | 读同级文件字节（题目配图） |
+| `releaseDirectory(dirRef)` | 释放 SAF 授权；桌面端空操作 |
+| `isDirectoryAvailable(dirRef)` | 检查授权或目录是否还在 |
+| `displayNameOf(dirRef)` | 从引用推导展示名，例如 `content://…/tree/primary%3ABooks` → `Books` |
 
 ### 页面
 
@@ -275,7 +299,7 @@ build/app/outputs/flutter-apk/app-release.apk
 
 - 四个页面放在 `IndexedStack` 里，切 tab 不销毁页面，因此扫描结果和练习进度会保留；
 - `MainScreen` 持有 `_selectedBank`，每次重建把最新的 `bank` 传给 `PracticePage`；
-- `PracticePage` 在 `didUpdateWidget` 里比较 `oldWidget.bank?.path` 和 `widget.bank?.path`，路径变化才重新加载；
+- `PracticePage` 在 `didUpdateWidget` 里比较 `oldWidget.bank?.uri` 和 `widget.bank?.uri`，换了文件才重新加载；
 - 题库页通过 `onOpenBank` 回调把选择交给父级，自己不直接操作练习页；
 - 练习页用 `_loadToken` 防止旧的异步加载覆盖新加载。
 
@@ -331,7 +355,7 @@ ValueListenableBuilder<List<String>>(
 final dirs = AppConfig.questionBankDirsNotifier.value;
 
 // 页面内加载某个题库
-final storage = QuestionBankStorage(sourcePath: path, fileName: name);
+final storage = QuestionBankStorage(file: file);
 final bank = await storage.load();
 ```
 
@@ -362,25 +386,46 @@ const QuoteCard(assetPath: 'assets/texts/other.txt'),
 2. 在这道题的 JSON 里写文件名：`"image": "q004.jpg"`；
 3. 一道题只支持一张图；没有图就写 `""` 或省略该字段。
 
-路径由 `QuestionBankStorage.sourceDir`（源 JSON 所在目录）解析，而不是文档目录里的工作副本——
-因为 `load()` 只复制 JSON，图片不会跟着复制。
+路径由 `QuestionBankStorage.sourceDirectoryRef`（题库所在目录的引用）解析，
+而不是文档目录里的工作副本 —— 因为 `load()` 只复制 JSON，图片不会跟着复制。
 
-## Android 权限与平台限制
+## Android 存储与平台差异
 
-`android/app/src/main/AndroidManifest.xml` 声明了：
+### 存储访问：SAF（不申请任何权限）
 
-- `READ_EXTERNAL_STORAGE`（maxSdk 32）
-- `WRITE_EXTERNAL_STORAGE`（maxSdk 29）
-- `MANAGE_EXTERNAL_STORAGE`（Android 11+）
+`android/app/src/main/AndroidManifest.xml` 里**没有任何** `uses-permission`，
+构建产物里唯一的权限是 AndroidX 自动合并的
+`DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`（非存储类，无需用户授权）。
 
-应用通过 `StoragePermission.ensure` 引导用户授予「所有文件访问」。
+读写流程：
 
-注意：
+1. 用户点右上角 `+`，原生层弹出 `ACTION_OPEN_DOCUMENT_TREE`；
+2. 选中目录后调用 `takePersistableUriPermission`，拿到可跨重启的 tree URI；
+3. URI 字符串存进 `config.json` 的 `questionBankDirs`；
+4. 之后列举、读取、写回全部通过 `ContentResolver` 完成。
 
-- `MANAGE_EXTERNAL_STORAGE` 属于高风险权限，Google Play 审核很严，个人自用/侧载没问题；
-- 如果以后要上架，建议改成 SAF 持久化 URI 或把题库放在 App 专属目录；
-- iOS / 桌面端能运行 UI，但路径和权限策略不同，需要单独适配；
-- 即使有 MANAGE 权限，`Android/data/<其他包名>` 和 `obb` 仍不可访问。
+为什么改：`MANAGE_EXTERNAL_STORAGE`（所有文件访问）属于高风险权限，
+国产 ROM 的安全引擎普遍把它判定为可疑应用（用户看到「报毒」），
+Google Play 也需要人工申报审核。改用 SAF 后：
+
+- 权限层面的风险特征消失；
+- 授权范围收窄到用户手动选中的那个文件夹；
+- 用户可以在「题库管理」里主动撤销。
+
+### 桌面端
+
+Windows / Linux / macOS 仍然用普通文件路径：`BankIo` 检测到引用不以
+`content://` 开头就走 `dart:io`，目录选择继续用 `file_picker`。
+
+### 平台限制
+
+- 授权是「按目录」的，不能跨目录访问；同一目录下的 `.json` 共用一份授权；
+- 用户可能在系统设置里撤销授权，撤销后该目录会显示「读取失败」，
+  移除记录再重新添加即可恢复；
+- Android 上旧版本存的绝对路径已无法访问，升级后会提示「旧版目录记录已失效」，
+  需要删除后重新添加（题库文件本身不受影响）；
+- iOS 上 `file_picker` 只能拿到临时路径，长期使用需要接入
+  `UIDocumentPicker` + security-scoped bookmark，目前未适配。
 
 ## 构建环境注意事项
 

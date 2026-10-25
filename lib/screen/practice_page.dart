@@ -66,7 +66,7 @@ class _PracticePageState extends State<PracticePage>
 
     // IndexedStack 会保留 State，换题库不会重跑 initState，只能在这里感知
     final bank = widget.bank;
-    if (bank != null && oldWidget.bank?.path != bank.path) {
+    if (bank != null && oldWidget.bank?.uri != bank.uri) {
       unawaited(_loadBank(bank));
     }
   }
@@ -114,10 +114,7 @@ class _PracticePageState extends State<PracticePage>
     });
 
     try {
-      final storage = QuestionBankStorage(
-        sourcePath: file.path,
-        fileName: file.name,
-      );
+      final storage = QuestionBankStorage(file: file);
       final bank = await storage.load();
 
       // 页面已销毁，或又开始了新的加载：丢弃这次结果
@@ -405,7 +402,7 @@ class _PracticePageState extends State<PracticePage>
 
     return QuestionImage(
       fileName: question.image,
-      directory: _storage?.sourceDir,
+      directoryRef: _storage?.sourceDirectoryRef,
     );
   }
 

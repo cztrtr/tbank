@@ -1,24 +1,18 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Android 10 及以下：传统读写权限 -->
-    <uses-permission
-        android:name="android.permission.READ_EXTERNAL_STORAGE"
-        android:maxSdkVersion="32" />
-    <uses-permission
-        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
-        android:maxSdkVersion="29" />
+    <!--
+        题库文件的读写走 SAF（Storage Access Framework）：
+        用户在系统目录选择器里显式授权某个文件夹，应用拿到持久化的
+        tree URI 后通过 ContentResolver 操作，因此不需要任何存储权限。
 
-    <!-- Android 11+：所有文件访问权限（仅自用/侧载，上架 Google Play 需单独申报） -->
-    <uses-permission
-        android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
-        tools:ignore="ScopedStorage" />
+        历史说明：早期版本申请过 MANAGE_EXTERNAL_STORAGE（所有文件访问），
+        该权限风险等级极高，会被国产 ROM 的安全引擎判定为可疑应用，已移除。
+    -->
 
     <application
         android:label="tbank"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher"
-        android:requestLegacyExternalStorage="true">
+        android:icon="@mipmap/ic_launcher">
         <activity
             android:name=".MainActivity"
             android:exported="true"
