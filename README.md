@@ -141,6 +141,7 @@ flutter build apk --release --split-per-abi
 | `image` | 字符串 | | 配图文件名。没有图就写 `""` 或省略 |
 | `options` | 数组 | 选择题 ✅ | 选项列表。填空/简答题写 `[]` |
 | `correctAnswer` | 数组 | ✅ | 正确答案列表，见下方「正确答案怎么写」 |
+| `analysis` | 字符串 | | 题目解析。作答后显示在判分结果下方，没有就写 `""` 或省略 |
 | `stats` | 对象 | | 作答统计，可以省略 |
 
 `options` 数组里每一项：
@@ -187,6 +188,7 @@ flutter build apk --release --split-per-abi
         { "key": "D", "text": "深圳" }
       ],
       "correctAnswer": ["B"],
+      "analysis": "北京是中华人民共和国的首都；上海、广州、深圳都是重要的中心城市，但不是首都。",
       "stats": { "attemptCount": 0, "wrongCount": 0 }
     },
     {
@@ -211,7 +213,8 @@ flutter build apk --release --split-per-abi
         { "key": "A", "text": "正确" },
         { "key": "B", "text": "错误" }
       ],
-      "correctAnswer": ["B"]
+      "correctAnswer": ["B"],
+      "analysis": "太阳系中体积最大的行星是木星，地球只排第五。"
     },
     {
       "id": "Q004",
@@ -237,7 +240,7 @@ flutter build apk --release --split-per-abi
 }
 ```
 
-注意 `Q003` 和 `Q005` 都省略了 `stats`、`Q003` 省略了 `image`——这两个字段是可选的。
+注意 `Q003` 和 `Q005` 都省略了 `stats`，`Q003` 省略了 `image`，`Q002`/`Q004`/`Q005` 省略了 `analysis`——这些字段都是可选的。
 
 ### 配图怎么放
 
@@ -274,6 +277,18 @@ flutter build apk --release --split-per-abi
 
 > **兼容说明**：旧题库里写的 `"correctAnswer": "B"` 仍能正常读取，会被当成 `["B"]`；下次做完题保存时会自动转成数组形态。
 
+### 解析怎么写
+
+`analysis` 是纯文本，答完题后显示在**判分结果下方**——无论答对还是答错都会展示。
+
+```json
+"analysis": "北京是中华人民共和国的首都；上海、广州、深圳都是重要的中心城市，但不是首都。"
+```
+
+- 支持换行：JSON 里写成转义符 `\n`
+- 留空或省略时**不显示**解析框，界面上不会出现空框
+- 与答案对错无关，只要作答完成就展示
+
 ### 常见错误对照
 
 | 界面现象 | 真实原因 |
@@ -284,6 +299,7 @@ flutter build apk --release --split-per-abi
 | 显示「图片不存在：xxx.jpg」 | 图片没和 JSON 放同一目录，或文件名拼错、大小写不符 |
 | 整个题库打不开 | JSON 语法错误，常见于多余/缺失的逗号、中文引号、末尾多写了逗号 |
 | 列表里找不到这个题库 | 目录没添加，或 JSON 放在了子文件夹里（只扫第一层） |
+| 答完后没有解析框 | `analysis` 为空或省略了——空解析不显示框 |
 
 ### 编辑时的三个注意点
 

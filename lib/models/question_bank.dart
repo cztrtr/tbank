@@ -63,6 +63,7 @@ class Question {
     required this.correctAnswers,
     required this.stats,
     this.image = '',
+    this.analysis = '',
   });
 
   final String id;
@@ -82,6 +83,9 @@ class Question {
   /// 单选/判断/填空只有一个元素，多选有多个。
   final List<String> correctAnswers;
 
+  /// 题目解析，作答后展示；空字符串表示这道题没有解析。
+  final String analysis;
+
   /// 统计对象是可变引用：答题时直接改 attemptCount / wrongCount，
   /// 保存时整份题库序列化会自动带上最新值。
   final QuestionStats stats;
@@ -94,6 +98,9 @@ class Question {
 
   /// 这道题是否配了图片。
   bool get hasImage => image.trim().isNotEmpty;
+
+  /// 这道题是否有解析。
+  bool get hasAnalysis => analysis.trim().isNotEmpty;
 
   factory Question.fromJson(Map<String, dynamic> json) {
     final rawOptions = json['options'];
@@ -120,6 +127,8 @@ class Question {
           : rawAnswer is String
               ? <String>[rawAnswer]
               : <String>[],
+      // 没写或为 null 时按“无解析”处理
+      analysis: json['analysis']?.toString().trim() ?? '',
       // stats 缺失时补 0/0，老文件也能正常打开
       stats: rawStats is Map
           ? QuestionStats.fromJson(rawStats.cast<String, dynamic>())
@@ -141,6 +150,8 @@ class Question {
         'options': options.map((option) => option.toJson()).toList(),
         // 统一数组形态，例如 ["A"] / ["A","C"] / ["H2O"]
         'correctAnswer': correctAnswers,
+        // 同样必须始终写回，否则答题保存后解析会丢失
+        'analysis': analysis,
         'stats': stats.toJson(),
       };
 }

@@ -154,6 +154,7 @@ build/app/outputs/flutter-apk/app-release.apk
         { "key": "D", "text": "深圳" }
       ],
       "correctAnswer": ["B"],
+      "analysis": "北京是中华人民共和国的首都；上海、广州、深圳都是重要的中心城市，但不是首都。",
       "stats": {
         "attemptCount": 120,
         "wrongCount": 15
@@ -183,6 +184,7 @@ build/app/outputs/flutter-apk/app-release.apk
         { "key": "B", "text": "错误" }
       ],
       "correctAnswer": ["B"],
+      "analysis": "太阳系中体积最大的行星是木星，地球只排第五。",
       "stats": { "attemptCount": 200, "wrongCount": 45 }
     },
     {
@@ -216,6 +218,7 @@ build/app/outputs/flutter-apk/app-release.apk
 - `type` 只认这四个值：`single_choice`、`multiple_choice`、`true_false`、`fill_blank`；
 - `correctAnswer` 一律是数组：单选单元素 `["B"]`、多选多元素 `["A","C"]`、填空 `["H2O"]`；
 - `correctAnswer` 里的每个值都必须能在 `options[].key` 里找到对应项（填空题 `options` 为空，不受限）；
+- `analysis` 是纯文本解析，作答后显示在判分结果下方，答对答错都展示；为空则不显示解析框；
 - 填空和解释都用 `fill_blank`，`options` 为空数组；
 - `stats` 可以缺省，解析时会补 `0 / 0`；
 - 未知 `type` 会按 `fill_blank` 处理，避免一条脏数据导致整份题库打不开；

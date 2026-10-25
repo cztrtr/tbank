@@ -365,7 +365,7 @@ class _PracticePageState extends State<PracticePage>
           ],
 
         if (_answered) ...<Widget>[
-          // 已判分：「下一题」紧跟作答区，对错提示放在它下面
+          // 已判分：「下一题」紧跟作答区，判分结果与解析依次排在它下面
           const SizedBox(height: 16),
           SizedBox(
             width: double.infinity,
@@ -376,6 +376,10 @@ class _PracticePageState extends State<PracticePage>
           ),
           const SizedBox(height: 16),
           _buildResult(question),
+          if (question.hasAnalysis) ...<Widget>[
+            const SizedBox(height: 12),
+            _buildAnalysis(question),
+          ],
         ] else if (!question.isFillBlank) ...<Widget>[
           // 未判分的选择题：选中至少一项才能提交
           const SizedBox(height: 16),
@@ -530,9 +534,53 @@ class _PracticePageState extends State<PracticePage>
     );
   }
 
+  /// 题目解析：无论答对答错都展示，用中性配色和判分结果条区分开。
+  ///
+  /// 没有解析（`analysis` 为空）时调用方不会插入这个组件。
+  Widget _buildAnalysis(Question question) {
+    final ColorScheme colorScheme = Theme.of(context).colorScheme;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: colorScheme.outlineVariant),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              Icon(
+                Icons.lightbulb_outline,
+                size: 16,
+                color: colorScheme.onSurfaceVariant,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                '解析',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          SelectableText(
+            question.analysis,
+            style: const TextStyle(fontSize: 14, height: 1.6),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// 把正确答案转成适合展示的文字：选择题带上选项内容。
-  String _answerText(Question question) {
-    if (question.isFillBlank) {
+  String _answerText(Question question) {    if (question.isFillBlank) {
       return question.correctAnswers.join(' / ');
     }
 
