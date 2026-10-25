@@ -297,7 +297,7 @@ class _PracticePageState extends State<PracticePage>
     return _buildQuestion(bank, bank.questions[_index]);
   }
 
-  /// 单题界面：题号、进度、题干、作答区、判分结果和下一题按钮。
+  /// 单题界面：题号、进度、题干、作答区、下一题按钮、判分结果。
   Widget _buildQuestion(QuestionBank bank, Question question) {
     final total = bank.questions.length;
     final colorScheme = Theme.of(context).colorScheme;
@@ -365,9 +365,7 @@ class _PracticePageState extends State<PracticePage>
           ],
 
         if (_answered) ...<Widget>[
-          // 已判分：显示对错和正确答案，再给“下一题”
-          const SizedBox(height: 16),
-          _buildResult(question),
+          // 已判分：「下一题」紧跟作答区，对错提示放在它下面
           const SizedBox(height: 16),
           SizedBox(
             width: double.infinity,
@@ -376,6 +374,8 @@ class _PracticePageState extends State<PracticePage>
               child: Text(_index + 1 >= total ? '完成练习' : '下一题'),
             ),
           ),
+          const SizedBox(height: 16),
+          _buildResult(question),
         ] else if (!question.isFillBlank) ...<Widget>[
           // 未判分的选择题：选中至少一项才能提交
           const SizedBox(height: 16),
