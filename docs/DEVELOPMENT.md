@@ -407,11 +407,21 @@ const QuoteCard(assetPath: 'assets/texts/other.txt'),
 
 ## Android 存储与平台差异
 
-### 存储访问：SAF（不申请任何权限）
+### 存储访问：SAF（不申请任何存储权限）
 
-`android/app/src/main/AndroidManifest.xml` 里**没有任何** `uses-permission`，
-构建产物里唯一的权限是 AndroidX 自动合并的
-`DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`（非存储类，无需用户授权）。
+`android/app/src/main/AndroidManifest.xml` 里只有一条权限：
+
+```xml
+<uses-permission android:name="android.permission.INTERNET" />
+```
+
+`INTERNET` 是 AI 判分 / AI 解析访问 `https://api.deepseek.com` 用的，普通权限、安装时不弹窗。
+构建产物里另有 AndroidX 自动合并的 `DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`（非存储类，无需授权）。
+
+> 注意：Flutter 只在 `src/debug` 和 `src/profile` 的模板 manifest 里自动加 `INTERNET`，
+> **release 包必须在主 manifest 显式声明**。漏了的话手机端会报
+> `网络请求失败：Failed host lookup: 'api.deepseek.com'`，而桌面端不受影响（Windows 没有这层权限控制）。
+> 排查方法：`aapt2 dump permissions app-release.apk` 看有没有 `INTERNET`。
 
 读写流程：
 

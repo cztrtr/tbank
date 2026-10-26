@@ -1,6 +1,14 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!--
+        AI 判分 / AI 解析需要访问 https://api.deepseek.com。
+        注意：Flutter 只在 debug/profile 模板里自动加 INTERNET，
+        release 包必须在主 manifest 显式声明，否则手机端会报
+        「Failed host lookup」而桌面端不受影响。
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
         题库文件的读写走 SAF（Storage Access Framework）：
         用户在系统目录选择器里显式授权某个文件夹，应用拿到持久化的
         tree URI 后通过 ContentResolver 操作，因此不需要任何存储权限。

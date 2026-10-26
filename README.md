@@ -110,6 +110,7 @@ AI 能力默认不启用，需要填自己的 DeepSeek API Key。不配也能正
 
 > 应用**不申请任何存储权限**（没有「所有文件访问」）。读写全部通过 Android 的
 > Storage Access Framework 完成，授权范围仅限你手动选中的文件夹。
+> 唯一的其它权限是 `INTERNET`（供 AI 判分/解析访问 DeepSeek，安装时不弹窗）。
 
 ## 自己构建
 
@@ -351,6 +352,7 @@ flutter build apk --release --split-per-abi
 - **AI 请求只发往 DeepSeek**：仅在你配置了 Key 并使用判分/解析时，把当前题目、标准答案和你的作答发到 `https://api.deepseek.com`，不经过任何中转
 - **不收集数据**：没有统计、没有崩溃上报、没有广告 SDK
 - **不申请任何存储权限**：题库读写通过 SAF 完成，只能访问你手动授权的文件夹
+- **唯一的网络权限是 `INTERNET`**：普通权限，安装时不弹窗，仅供 AI 功能访问 DeepSeek
 - **密钥存储**：以 base64 编码保存在 App 私有目录的 `config.json`——base64 只是编码不是加密，能读到该文件的人可以还原出明文
 
 ## 常见问题

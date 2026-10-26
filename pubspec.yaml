@@ -1,7 +1,7 @@
 name: tbank
 description: "本地题库刷题 App：扫描 JSON 题库、逐题作答、记录并回写每题统计。"
 publish_to: 'none'
-version: 0.1.5+4
+version: 0.1.6+5
 
 environment:
   sdk: ^3.13.5
