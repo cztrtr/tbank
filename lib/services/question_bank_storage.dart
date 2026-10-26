@@ -24,26 +24,16 @@ class QuestionBankStorage {
   final QuestionBankFile file;
 
   File? _workingFile; // 文档目录下的工作副本
-  QuestionBank? _bank; // 最近一次加载或保存的题库
 
   /// 串行队列：保证「写副本」和「回拷」按调用顺序执行，
   /// 不会出现副本只写了一半就被写回题库的情况。
   Future<void> _queue = Future<void>.value();
-
-  /// 工作副本的绝对路径，调试时可以打印出来确认位置。
-  String? get workingPath => _workingFile?.path;
-
-  /// 文件名，同时作为文档目录下副本的名字。
-  String get fileName => file.name;
 
   /// 题库所在目录的引用。
   ///
   /// 题目配图就放在这个目录下，文件名记在 `Question.image` 里。
   /// 注意不能用工作副本所在目录：复制到文档目录的只有 JSON。
   String get sourceDirectoryRef => file.directoryRef;
-
-  /// 最近一次加载或保存的题库；未加载时为 null。
-  QuestionBank? get bank => _bank;
 
   /// 从题库来源读出 JSON，写到文档目录并解析进内存。
   Future<QuestionBank> load() async {
@@ -64,13 +54,11 @@ class QuestionBankStorage {
 
     final QuestionBank bank = QuestionBank.fromJson(decoded);
     _workingFile = working;
-    _bank = bank;
     return bank;
   }
 
   /// 把内存中的题库写回文档目录下的副本；每答完一题调用一次。
   Future<void> save(QuestionBank bank) {
-    _bank = bank;
     return _enqueue(() async {
       final File? working = _workingFile;
       if (working == null) return;

@@ -4,11 +4,15 @@
 // 3. 每题判分后更新内存统计并写回工作副本；
 // 4. 完成整份 / 进入后台 / 页面销毁时，把工作副本回拷到题库文件夹。
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
 import '../models/question_bank.dart';
 import '../models/question_bank_file.dart';
+import '../services/app_config.dart';
+import '../services/bank_io.dart';
+import '../services/ds_api_service.dart';
 import '../services/question_bank_storage.dart';
 import '../widgets/question_image.dart';
 
@@ -41,6 +45,14 @@ class _PracticePageState extends State<PracticePage>
   bool _showAnswer = false; // 填空/解释是否已展示答案
   bool _answered = false; // 当前题是否已经判定过
   bool _wasCorrect = false; // 当前题答得对不对
+  bool _grading = false; // 是否正在等 AI 判分
+  bool _aiFallback = false; // AI 判分不可用时，本题退回自判
+  int? _aiScore; // 本题的 AI 得分（0-10），仅主观题用
+  bool _aiAnalysisLoading = false; // 是否正在请求 AI 解析
+  String? _aiAnalysis; // 当前题的 AI 解析文本
+  String? _aiAnalysisError; // AI 解析失败原因
+  final TextEditingController _answerController =
+      TextEditingController(); // 主观题的作答输入
   bool _finished = false; // 整套题是否做完
   int _answeredCount = 0; // 本次练习一共答了多少题
   int _correctCount = 0; // 本次练习答对了多少题
@@ -84,6 +96,7 @@ class _PracticePageState extends State<PracticePage>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _answerController.dispose();
     unawaited(_syncBack()); // 页面销毁时再尝试同步一次
     super.dispose();
   }
@@ -137,9 +150,16 @@ class _PracticePageState extends State<PracticePage>
   /// 重置“当前题”相关的临时状态，进入下一题时调用。
   void _resetQuestionState() {
     _selected.clear();
+    _answerController.clear();
     _showAnswer = false;
     _answered = false;
     _wasCorrect = false;
+    _grading = false;
+    _aiFallback = false;
+    _aiScore = null;
+    _aiAnalysisLoading = false;
+    _aiAnalysis = null;
+    _aiAnalysisError = null;
   }
 
   /// 记录一次作答：更新内存统计，并立刻写一次工作副本。
@@ -164,6 +184,95 @@ class _PracticePageState extends State<PracticePage>
 
     // 每答完一题就写一次文档目录下的副本，不做防抖
     unawaited(_persist());
+  }
+
+  /// 把主观题作答交给 AI 判分：得分 >= 6 判为答对。
+  ///
+  /// 判分失败（网络、Key 失效等）时提示并退回自判，保证这题还能继续做。
+  Future<void> _submitWithAi(Question question) async {
+    final String answer = _answerController.text.trim();
+    if (answer.isEmpty || _grading) return;
+
+    setState(() => _grading = true);
+    try {
+      // 题目有配图就一起发给 AI；读不到图时降级为纯文本判分
+      Uint8List? imageBytes;
+      final QuestionBankStorage? storage = _storage;
+      if (question.hasImage && storage != null) {
+        try {
+          imageBytes = await BankIo.readSiblingBytes(
+            storage.sourceDirectoryRef,
+            question.image,
+          );
+        } catch (error) {
+          debugPrint('读取题目配图失败，改按纯文本判分：$error');
+        }
+      }
+
+      final int score = await DsApiService.scoreAnswer(
+        question: question.question,
+        standardAnswer: question.correctAnswers.join('\n'),
+        userAnswer: answer,
+        imageBytes: imageBytes,
+      );
+      if (!mounted) return;
+
+      _aiScore = score; // 先记分，_recordAnswer 的 setState 会一并刷新
+      _recordAnswer(score >= 6);
+    } on DsApiException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('AI 判分失败：${error.message}')),
+      );
+      setState(() => _aiFallback = true); // 本题退回自判
+    } finally {
+      if (mounted) setState(() => _grading = false);
+    }
+  }
+
+  /// 请求 AI 解析当前选择题：把题干、选项、正确答案（有图则带图）发给模型。
+  ///
+  /// 结果存在页面最下方的「AI 解析」框里；失败时在同一个框里显示原因并可重试。
+  Future<void> _requestAiAnalysis(Question question) async {
+    if (_aiAnalysisLoading) return;
+
+    setState(() {
+      _aiAnalysisLoading = true;
+      _aiAnalysisError = null;
+    });
+
+    try {
+      // 题目有配图就一起发，读不到则忽略图片
+      Uint8List? imageBytes;
+      final QuestionBankStorage? storage = _storage;
+      if (question.hasImage && storage != null) {
+        try {
+          imageBytes = await BankIo.readSiblingBytes(
+            storage.sourceDirectoryRef,
+            question.image,
+          );
+        } catch (error) {
+          debugPrint('读取题目配图失败，AI 解析将忽略图片：$error');
+        }
+      }
+
+      final String text = await DsApiService.explainQuestion(
+        question: question.question,
+        options: question.options
+            .map((QuestionOption option) => '${option.key}. ${option.text}')
+            .join('\n'),
+        correctAnswer: _answerText(question),
+        imageBytes: imageBytes,
+      );
+
+      if (!mounted) return;
+      setState(() => _aiAnalysis = text);
+    } on DsApiException catch (error) {
+      if (!mounted) return;
+      setState(() => _aiAnalysisError = error.message);
+    } finally {
+      if (mounted) setState(() => _aiAnalysisLoading = false);
+    }
   }
 
   /// 把当前题库写回文档目录下的工作副本。
@@ -365,14 +474,34 @@ class _PracticePageState extends State<PracticePage>
           ],
 
         if (_answered) ...<Widget>[
-          // 已判分：「下一题」紧跟作答区，判分结果与解析依次排在它下面
+          // 已判分：左边「AI 解析」（仅选择题），右边「下一题」
           const SizedBox(height: 16),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton(
-              onPressed: _next,
-              child: Text(_index + 1 >= total ? '完成练习' : '下一题'),
-            ),
+          Row(
+            children: <Widget>[
+              if (!question.isFillBlank) ...<Widget>[
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: _aiAnalysisLoading
+                        ? null
+                        : () => _requestAiAnalysis(question),
+                    child: _aiAnalysisLoading
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Text('AI 解析'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+              ],
+              Expanded(
+                child: FilledButton(
+                  onPressed: _next,
+                  child: Text(_index + 1 >= total ? '完成练习' : '下一题'),
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 16),
           _buildResult(question),
@@ -380,6 +509,8 @@ class _PracticePageState extends State<PracticePage>
             const SizedBox(height: 12),
             _buildAnalysis(question),
           ],
+          // AI 解析结果固定在页面最下方
+          if (!question.isFillBlank) ..._buildAiAnalysis(question),
         ] else if (!question.isFillBlank) ...<Widget>[
           // 未判分的选择题：选中至少一项才能提交
           const SizedBox(height: 16),
@@ -443,8 +574,60 @@ class _PracticePageState extends State<PracticePage>
     ];
   }
 
-  /// 填空/解释作答区：先展示答案，再让用户判断自己答对没有。
+  /// 填空/解释作答区。
+  ///
+  /// 配了 DeepSeek API Key 时用 AI 判分：多行输入框 + 提交，AI 给 0-10 分，
+  /// 低于 6 分判错；没配 Key 或本题判分失败时退回「展示答案 + 自判」。
   List<Widget> _buildFillBlank(Question question) {
+    final bool aiEnabled = !_aiFallback &&
+        (AppConfig.dsApiKey ?? '').trim().isNotEmpty;
+
+    if (!aiEnabled) {
+      return _buildFillBlankManual(question);
+    }
+
+    // 已判分：输入区收起，对错 / AI 得分 / 参考答案 / 解析由下方结果区展示
+    if (_answered) {
+      return <Widget>[];
+    }
+
+    final bool canSubmit =
+        !_grading && _answerController.text.trim().isNotEmpty;
+
+    return <Widget>[
+      TextField(
+        controller: _answerController,
+        minLines: 3,
+        maxLines: null, // 随输入内容自动增高
+        enabled: !_grading,
+        onChanged: (_) => setState(() {}), // 让提交按钮的可用状态跟随输入
+        style: const TextStyle(fontSize: 15, height: 1.5),
+        decoration: InputDecoration(
+          hintText: '在这里输入你的答案',
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+        ),
+      ),
+      const SizedBox(height: 12),
+      SizedBox(
+        width: double.infinity,
+        child: FilledButton(
+          onPressed: canSubmit ? () => _submitWithAi(question) : null,
+          child: _grading
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('提交'),
+        ),
+      ),
+    ];
+  }
+
+  /// 没有可用 AI 时的老流程：先展示答案，再由用户自己判断对错。
+  List<Widget> _buildFillBlankManual(Question question) {
     return <Widget>[
       if (!_showAnswer)
         SizedBox(
@@ -529,6 +712,13 @@ class _PracticePageState extends State<PracticePage>
             '正确答案：${_answerText(question)}',
             style: TextStyle(color: foreground),
           ),
+          if (_aiScore != null) ...<Widget>[
+            const SizedBox(height: 4),
+            Text(
+              'AI 评分：$_aiScore / 10',
+              style: TextStyle(color: foreground),
+            ),
+          ],
         ],
       ),
     );
@@ -577,6 +767,90 @@ class _PracticePageState extends State<PracticePage>
         ],
       ),
     );
+  }
+
+  /// AI 解析区域：只有点过「AI 解析」后才出现，固定排在页面最下方。
+  ///
+  /// 三种状态共用一个外框：加载中、请求失败（可重试）、拿到解析文本。
+  List<Widget> _buildAiAnalysis(Question question) {
+    if (!_aiAnalysisLoading && _aiAnalysis == null && _aiAnalysisError == null) {
+      return const <Widget>[];
+    }
+
+    final ColorScheme colorScheme = Theme.of(context).colorScheme;
+
+    return <Widget>[
+      const SizedBox(height: 12),
+      Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: colorScheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: colorScheme.outlineVariant),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                Icon(
+                  Icons.auto_awesome,
+                  size: 16,
+                  color: colorScheme.onSurfaceVariant,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  'AI 解析',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            if (_aiAnalysisLoading)
+              Row(
+                children: <Widget>[
+                  const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  const SizedBox(width: 10),
+                  Text(
+                    '正在生成解析…',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              )
+            else if (_aiAnalysisError != null) ...<Widget>[
+              Text(
+                _aiAnalysisError!,
+                style: TextStyle(fontSize: 13, color: colorScheme.error),
+              ),
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton(
+                  onPressed: () => _requestAiAnalysis(question),
+                  child: const Text('重试'),
+                ),
+              ),
+            ] else
+              SelectableText(
+                _aiAnalysis!,
+                style: const TextStyle(fontSize: 14, height: 1.6),
+              ),
+          ],
+        ),
+      ),
+    ];
   }
 
   /// 把正确答案转成适合展示的文字：选择题带上选项内容。

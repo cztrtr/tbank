@@ -2,9 +2,9 @@
 //
 // 配置文件：App 私有目录下的 config.json。
 // 启动时由 main() 调用 AppConfig.init() 载入；之后：
-// - 读：AppConfig.appVersion、AppConfig.questionBankDirs；
+// - 读：通过 getter 或 ValueNotifier；
 // - 写：add/remove/set 方法，改完立即落盘并通知界面。
-import 'dart:convert'; // JSON 编解码：jsonDecode、JsonEncoder
+import 'dart:convert'; // JSON 编解码、base64
 import 'dart:io'; // 文件与路径：File、Platform
 
 import 'package:flutter/foundation.dart'; // 日志输出：debugPrint
@@ -14,7 +14,7 @@ import 'package:path_provider/path_provider.dart'; // getApplicationSupportDirec
 ///
 /// 负责 config.json 的读写：
 /// - 启动时调用 init()，把文件内容读进内存；文件不存在就创建；
-/// - 读用静态 getter，任何文件都能直接访问；
+/// - 读用静态 getter 或 ValueNotifier；
 /// - 写用静态方法，改完内存立即写回文件。
 class AppConfig {
   AppConfig._(); // 私有构造，禁止外部 new，只能通过静态成员访问
@@ -22,15 +22,13 @@ class AppConfig {
   static final AppConfig _instance = AppConfig._(); // 进程内唯一实例，保存内存状态和文件句柄
 
   static const String _fileName = 'config.json'; // 文件名，存在 App 私有目录
-  static const String _defaultAppVersion = '1.0.0'; // 文件不存在或字段缺失时的默认版本
-  
 
-  String _appVersion = _defaultAppVersion; // 内存中的 App 版本，形如 1.0.0
   List<String> _questionBankDirs = <String>[]; // 内存中的题库目录列表，顺序与文件一致
   int _clockOn = 0; // 连续打卡天数
   String _lastClockOnDate = ''; // 上次打卡日期，格式 yyyy-MM-dd；空表示从未打卡
   File? _file; // config.json 的句柄，init() 成功定位后才非空
   bool _loaded = false; // 是否已完成加载，防止重复读文件
+  String? _dsApiKey; // 内存中的 DS API Key（明文）；持久化时转 base64 再写入 config.json
 
   /// 题库目录的全局实时值：任何页面监听它，目录变化后都会自动重建。
   /// 初始为空，AppConfig.init() 完成后才会填入文件里的数据。
@@ -40,42 +38,21 @@ class AppConfig {
   static final ValueNotifier<int> clockOnNotifier =
       ValueNotifier<int>(0);
 
-  /// 当前 App 版本，全局可读。
-  static String get appVersion => _instance._appVersion;
-
-  /// 当前连续打卡天数，全局可读。
-  static int get clockOn => _instance._clockOn;
-
-  /// 上次打卡日期，格式 yyyy-MM-dd；空字符串表示还没打过。
-  static String get lastClockOnDate => _instance._lastClockOnDate;
+  /// DS API Key 的全局实时值；设置后监听它的页面会自动刷新。
+  ///
+  /// 这里存的是明文，只有在 config.json 里才以 base64 形式保存。
+  static final ValueNotifier<String?> dsApiKeyNotifier =
+      ValueNotifier<String?>(null);
 
   /// 今天是否已经打过卡。
   static bool get hasCheckedInToday =>
       _instance._lastClockOnDate == _todayString();
 
-  /// 题库目录列表的只读副本，全局可读。
-  ///
-  /// 返回的是快照，改它不会影响内部状态；修改请用 add/remove/set 方法。
-  static List<String> get questionBankDirs =>
-      List<String>.unmodifiable(_instance._questionBankDirs);
+  /// DS API Key，全局可读。
+  static String? get dsApiKey => _instance._dsApiKey;
 
   /// 启动时调用一次：读配置到内存，没有文件就创建。
   static Future<void> init() => _instance._load();
-
-  /// 修改 App 版本，并立即写入文件。
-  static Future<void> setAppVersion(String value) async {
-    _instance._appVersion = value; // 先改内存，读取立即生效
-    await _instance._save(); // 再落盘
-  }
-
-  /// 修改打卡，并立即写入文件。
-  ///
-  /// 注意：这个方法只改天数、不改“上次打卡日期”，
-  /// 日常打卡应该用 [checkInToday]，否则连续天数判断会失效。
-  static Future<void> setClockOn(int value) async {
-    _instance._clockOn = value; // 先改内存，读取立即生效
-    await _instance._save(); // 再落盘
-  }
 
   /// 完成今天的打卡，返回是否真的新增了一天。
   ///
@@ -125,10 +102,23 @@ class AppConfig {
     return _dateString(DateTime(now.year, now.month, now.day - 1));
   }
 
-  /// 整体替换题库目录列表，并立即写入文件；适合排序、批量导入。
-  static Future<void> setQuestionBankDirs(List<String> dirs) async {
-    _instance._questionBankDirs = List<String>.from(dirs); // 复制一份，避免外部后续改传入的列表影响内部
-    await _instance._save();
+  /// 把明文 API Key 转成 base64 用于存储；空值返回 null。
+  ///
+  /// 注意：base64 只是编码，不是加密——它只能避免密钥以明文形态躺在
+  /// config.json 里被人一眼看到，挡不住主动解码。
+  static String? _encodeApiKey(String? value) {
+    if (value == null || value.isEmpty) return null;
+    return base64Encode(utf8.encode(value));
+  }
+
+  /// 把 config.json 里的 dsApiKey（base64）解回明文；无效值返回 null。
+  static String? _decodeApiKey(Object? raw) {
+    if (raw is! String || raw.isEmpty) return null;
+    try {
+      return utf8.decode(base64Decode(raw));
+    } catch (_) {
+      return null; // 不是合法 base64：视为未配置
+    }
   }
 
   /// 追加一个题库目录，已存在则忽略；成功后立即写入文件。
@@ -145,14 +135,21 @@ class AppConfig {
     await _instance._save();
   }
 
-  /// 手动保存，一般不需要调用，add/remove/set 内部已经保存。
-  static Future<void> save() => _instance._save();
+  /// 修改 DS API Key：更新内存并写入 config.json（base64 编码后存储）。
+  ///
+  /// 传 null 或空串表示清除。
+  static Future<void> setDsApiKey(String? value) async {
+    _instance._dsApiKey =
+        (value == null || value.trim().isEmpty) ? null : value.trim();
+    await _instance._save(); // 落盘，并在 _syncNotifier 里通知界面
+  }
 
-  /// 把内存里的目录同步到全局可监听值，通知所有监听页面。
+  /// 把内存里的配置同步到全局可监听值，通知所有监听页面。
   void _syncNotifier() {
     questionBankDirsNotifier.value =
         List<String>.unmodifiable(_questionBankDirs);
     clockOnNotifier.value = _clockOn;
+    dsApiKeyNotifier.value = _dsApiKey; // 通知所有页面刷新 DS API Key
   }
 
   /// 真正的加载逻辑：定位目录、读文件、解析、填内存。
@@ -168,7 +165,6 @@ class AppConfig {
         // 已有文件：读取并解析
         final data = jsonDecode(await _file!.readAsString()); // 内容不是合法 JSON 会抛异常
         if (data is Map<String, dynamic>) {
-          _appVersion = data['appVersion'] as String? ?? _defaultAppVersion; // 缺失或类型不对就用默认值
           final dirs = data['questionBankDirs'];
           _questionBankDirs =
               dirs is List ? dirs.whereType<String>().toList() : <String>[]; // 只收集字符串项，忽略脏数据
@@ -176,6 +172,7 @@ class AppConfig {
           _clockOn = clockOn is num ? clockOn.toInt() : 0; // 缺失或类型不对就用默认值
           final lastDate = data['lastClockOnDate'];
           _lastClockOnDate = lastDate is String ? lastDate : ''; // 空表示从未打卡
+          _dsApiKey = _decodeApiKey(data['dsApiKey']); // base64 → 明文；无效视为未设置
         }
       } else {
         // 没有文件：用默认值写一份，此时内存里已经是默认值
@@ -184,14 +181,14 @@ class AppConfig {
     } catch (error) {
       // 文件损坏、读取失败等：不阻塞启动，退回默认值并覆盖成合法文件
       debugPrint('读取配置失败，使用默认值：$error');
-      _appVersion = _defaultAppVersion;
       _questionBankDirs = <String>[];
       _clockOn = 0;
       _lastClockOnDate = '';
+      _dsApiKey = null;
       await _save();
     } finally {
       _loaded = true; // 无论成功失败都标记完成，避免反复重试
-      _syncNotifier(); // 通知所有页面刷新目录列表
+      _syncNotifier(); // 通知所有页面刷新配置
     }
   }
 
@@ -202,15 +199,15 @@ class AppConfig {
 
     try {
       final content = const JsonEncoder.withIndent('  ').convert(<String, dynamic>{
-        'appVersion': _appVersion, // 写入当前版本
-        'questionBankDirs': _questionBankDirs, // 写入当前目录列表，顺序保持一致
+        'questionBankDirs': _questionBankDirs, // 题库目录列表，顺序保持一致
         'clockOnNum': _clockOn, // 连续打卡天数
         'lastClockOnDate': _lastClockOnDate, // 上次打卡日期 yyyy-MM-dd
+        'dsApiKey': _encodeApiKey(_dsApiKey), // DS API Key（base64 编码后存储）
       });
       await file.writeAsString(content, flush: true); // 覆盖写并刷新到系统
     } catch (error) {
       debugPrint('保存配置失败：$error'); // 写失败只记日志，不影响界面继续使用
     }
-    _syncNotifier(); // 通知所有页面刷新目录列表，即使写失败也要通知，避免界面显示过时数据
+    _syncNotifier(); // 通知所有页面，即使写失败也要通知，避免界面显示过时数据
   }
 }

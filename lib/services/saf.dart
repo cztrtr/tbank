@@ -106,13 +106,4 @@ class Saf {
       'uri': directoryUri,
     });
   }
-
-  /// 检查目录的持久授权是否仍然有效（用户可能在系统设置里撤销）。
-  static Future<bool> hasPersistedPermission(String directoryUri) async {
-    final bool? granted = await _channel.invokeMethod<bool>(
-      'hasPersistedPermission',
-      <String, dynamic>{'uri': directoryUri},
-    );
-    return granted ?? false;
-  }
 }

@@ -16,7 +16,7 @@ class BankIo {
   BankIo._();
 
   /// 这个引用是不是 SAF 的 content URI。
-  static bool isSafRef(String ref) => ref.startsWith('content://');
+  static bool _isSafRef(String ref) => ref.startsWith('content://');
 
   /// 列出目录下所有 `.json`，按文件名升序。
   ///
@@ -25,7 +25,7 @@ class BankIo {
     String directoryRef, {
     String? directoryName,
   }) async {
-    if (isSafRef(directoryRef)) {
+    if (_isSafRef(directoryRef)) {
       final List<SafEntry> entries =
           await Saf.listChildren(directoryRef, extension: '.json');
 
@@ -79,7 +79,7 @@ class BankIo {
 
   /// 读取题库 JSON 文本。
   static Future<String> readText(String fileRef) async {
-    if (isSafRef(fileRef)) {
+    if (_isSafRef(fileRef)) {
       // 原生侧已经去掉了 BOM
       return Saf.readText(fileRef);
     }
@@ -88,7 +88,7 @@ class BankIo {
 
   /// 覆盖写入题库 JSON 文本。
   static Future<void> writeText(String fileRef, String text) async {
-    if (isSafRef(fileRef)) {
+    if (_isSafRef(fileRef)) {
       await Saf.writeText(fileRef, text);
       return;
     }
@@ -100,7 +100,7 @@ class BankIo {
     String directoryRef,
     String fileName,
   ) async {
-    if (isSafRef(directoryRef)) {
+    if (_isSafRef(directoryRef)) {
       return Saf.readChildBytes(directoryRef, fileName);
     }
 
@@ -111,23 +111,11 @@ class BankIo {
 
   /// 释放目录授权（仅 SAF 有意义，桌面端是空操作）。
   static Future<void> releaseDirectory(String directoryRef) async {
-    if (!isSafRef(directoryRef)) return;
+    if (!_isSafRef(directoryRef)) return;
     try {
       await Saf.releasePermission(directoryRef);
     } catch (_) {
       // 用户可能已在系统设置里撤销，忽略即可
-    }
-  }
-
-  /// 目录是否仍然可用：SAF 检查持久授权，路径检查目录存在。
-  static Future<bool> isDirectoryAvailable(String directoryRef) async {
-    if (isSafRef(directoryRef)) {
-      return Saf.hasPersistedPermission(directoryRef);
-    }
-    try {
-      return await Directory(directoryRef).exists();
-    } catch (_) {
-      return false;
     }
   }
 
@@ -136,7 +124,7 @@ class BankIo {
   /// SAF 例：`content://.../tree/primary%3ABooks` → `Books`
   /// 路径例：`D:\题库` → `题库`
   static String displayNameOf(String directoryRef) {
-    if (isSafRef(directoryRef)) {
+    if (_isSafRef(directoryRef)) {
       final String decoded = Uri.decodeComponent(directoryRef);
       final int colon = decoded.lastIndexOf(':');
       if (colon >= 0 && colon < decoded.length - 1) {

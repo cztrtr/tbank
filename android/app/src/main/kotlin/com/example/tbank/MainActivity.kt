@@ -25,7 +25,6 @@ import java.util.concurrent.Executors
  * - writeText           按 URI 覆盖写 UTF-8 文本
  * - readChildBytes      在目录里按文件名找子文件并读成字节（配图用）
  * - releasePermission   释放某个 tree 的持久授权
- * - hasPersistedPermission 检查授权是否还在
  */
 class MainActivity : FlutterActivity() {
     private val channelName = "tbank/saf"
@@ -76,11 +75,6 @@ class MainActivity : FlutterActivity() {
                             val uri = call.argument<String>("uri")
                             if (uri == null) result.error("bad_args", "缺少 uri", null)
                             else runIo(result) { releasePermission(uri); true }
-                        }
-                        "hasPersistedPermission" -> {
-                            val uri = call.argument<String>("uri")
-                            if (uri == null) result.error("bad_args", "缺少 uri", null)
-                            else runIo(result) { hasPersistedPermission(uri) }
                         }
                         else -> result.notImplemented()
                     }
@@ -256,13 +250,6 @@ class MainActivity : FlutterActivity() {
             )
         } catch (_: SecurityException) {
             // 没授权过就不用管
-        }
-    }
-
-    private fun hasPersistedPermission(uriString: String): Boolean {
-        val target = Uri.parse(uriString)
-        return contentResolver.persistedUriPermissions.any {
-            it.uri == target && it.isReadPermission && it.isWritePermission
         }
     }
 

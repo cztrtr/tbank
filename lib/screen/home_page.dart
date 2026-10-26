@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 import 'dart:ui' show ImageFilter;
 
@@ -33,8 +34,12 @@ class _HomePageState extends State<HomePage> {
 
     // 等第一帧渲染后再触发入场，避免页面一打开就是生硬的静态卡片
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        setState(() => _cardVisible = true);
+      if (!mounted) return;
+      setState(() => _cardVisible = true);
+
+      // 今天已经打过卡：卡片只在本次启动时展示 3 秒，随后自动离场
+      if (_alreadyCheckedToday) {
+        unawaited(_autoHideCheckedInCard());
       }
     });
   }
@@ -88,8 +93,9 @@ class _HomePageState extends State<HomePage> {
     if (!mounted) return;
 
     if (!success) {
-      // 今天已经打过，只切换成不可点击的“已打卡”状态，不播成功动画
+      // 今天已经打过，切换成不可点击的“已打卡”状态，短暂展示后自动离场
       setState(() => _alreadyCheckedToday = true);
+      unawaited(_autoHideCheckedInCard());
       return;
     }
 
@@ -109,12 +115,29 @@ class _HomePageState extends State<HomePage> {
     setState(() => _cardRemoved = true);
   }
 
+  /// 今天已经打过卡时使用：卡片展示 3 秒后淡出上滑，再从树上移除。
+  ///
+  /// 与正常打卡的离场动画一致，区别只在于不需要等待「HELLO」停留。
+  Future<void> _autoHideCheckedInCard() async {
+    await Future<void>.delayed(const Duration(seconds: 3));
+    if (!mounted) return;
+
+    // 触发卡片淡出 + 上滑离场
+    setState(() => _cardVisible = false);
+
+    // 等离场动画结束再从树上移除
+    await Future<void>.delayed(const Duration(milliseconds: 400));
+    if (!mounted) return;
+
+    setState(() => _cardRemoved = true);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppBar(
-        title: const Text('Home'),
+        title: const Text('首页'),
         backgroundColor: Colors.transparent,
         elevation: 0,
         foregroundColor: Colors.white,
@@ -130,11 +153,15 @@ class _HomePageState extends State<HomePage> {
               padding: const EdgeInsets.only(top: kToolbarHeight),
               child: Column(
                 children: <Widget>[
-                  if (_cardRemoved)
-                    // 卡片离场后留下等高占位，避免下面的语录卡突然上跳
-                    const SizedBox(height: 190 + 16)
-                  else
-                    _buildCheckInCard(context),
+                  // 卡片离场后高度平滑收缩到 0，下面的语录卡随之上移
+                  AnimatedSize(
+                    duration: const Duration(milliseconds: 300),
+                    curve: Curves.easeOutCubic,
+                    alignment: Alignment.topCenter,
+                    child: _cardRemoved
+                        ? const SizedBox.shrink()
+                        : _buildCheckInCard(context),
+                  ),
                   const Padding(
                     padding: EdgeInsets.only(top: 20),
                     child: QuoteCard(),

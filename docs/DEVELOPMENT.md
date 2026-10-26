@@ -4,7 +4,7 @@
 
 题库是普通的 `.json` 文件，可以放在手机存储的任意目录；App 负责扫描目录、读取题目、记录每题累计作答/答错次数，并把统计回写到原文件。
 
-> 当前状态：题库管理、练习（含题目配图）、本地统计、首页打卡卡片与语录卡已实现；ME 还是占位页。
+> 当前状态：题库管理、练习（含题目配图）、本地统计、首页打卡卡片与语录卡、ME 页设置入口已实现；设置页目前只有 DeepSeek 密钥一项。
 
 ## 功能
 
@@ -13,7 +13,7 @@
   - 每次启动从 `assets/images/home_bg/` 随机选择一张背景图，使用 `BoxFit.cover` 等比铺满
   - 顶部居中的圆角正方形打卡卡片（半透明毛玻璃）：显示「打卡」、累计天数、日期
   - 点击卡片后文案变为 `HELLO`、天数隐藏、日期放大，1 秒后卡片淡出离场；同时按连续打卡规则更新 `clockOnNum` 和 `lastClockOnDate`
-  - 如果今天已经打过卡，卡片显示「已打卡」、保留天数，但不可再次点击
+  - 如果今天已经打过卡，卡片显示「已打卡」、保留天数，但不可再次点击；**只在本次启动展示 3 秒，随后自动淡出并从布局中移除**（语录卡随之上移）
   - 打卡卡片下方是一张半透明圆角「语录卡」：启动时从 `assets/texts/quotes.txt` 随机取一句；点击换下一句，且不会连续两次显示同一句
   - 语录文件的格式：一行一句，空行忽略，`#` 开头的行是注释
 - 题库管理
@@ -65,18 +65,19 @@ lib/
 │   ├── question_bank.dart          # 题库/题目/选项/统计/题型枚举
 │   └── question_bank_file.dart     # 题库文件（名称 + 引用 + 所属目录）
 ├── services/
-│   ├── app_config.dart             # config.json 读写、题库目录全局 notifier
+│   ├── app_config.dart             # config.json 读写、全局 notifier
 │   ├── question_bank_storage.dart  # 读取/保存/回拷题库文件
 │   ├── bank_io.dart                # 存储访问统一入口（SAF / 文件路径）
-│   └── saf.dart                    # Android SAF 通道封装
+│   ├── saf.dart                    # Android SAF 通道封装
+│   └── ds_api_service.dart         # DeepSeek API 调用
 ├── screen/
 │   ├── main_screen.dart            # 底部导航 + IndexedStack
 │   ├── home_page.dart              # 随机背景 + 打卡卡片
 │   ├── question_bank_page.dart     # 目录选择、扫描、题库列表
 │   ├── practice_page.dart          # 练习界面与答题逻辑
-│   └── me_page.dart                # 占位
+│   ├── me_page.dart                # 个人中心，提供设置入口
+│   └── settings_page.dart          # 设置页
 └── widgets/
-    ├── page_placeholder.dart       # 占位页面（仅 ME 还在用）
     ├── quote_card.dart             # 首页语录卡：随机一句、点击换句
     └── question_image.dart         # 题目配图：加载 + 缺失/损坏占位
 ```
@@ -117,10 +118,10 @@ build/app/outputs/flutter-apk/app-release.apk
 
 ```json
 {
-  "appVersion": "1.0.0",
   "questionBankDirs": [],
   "clockOnNum": 0,
-  "lastClockOnDate": ""
+  "lastClockOnDate": "",
+  "dsApiKey": null
 }
 ```
 
@@ -128,14 +129,14 @@ build/app/outputs/flutter-apk/app-release.apk
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `appVersion` | string | App 版本，默认 `1.0.0`，目前只作为记录 |
-| `questionBankDirs` | string[] | 题库目录的绝对路径列表 |
+| `questionBankDirs` | string[] | 题库目录引用列表：Android 为 SAF 的 `content://` URI，桌面为绝对路径 |
 | `clockOnNum` | int | 连续打卡天数，默认为 `0`；昨天打过则 +1，断签或首次打卡重置为 1 |
 | `lastClockOnDate` | string | 上次打卡日期，格式 `yyyy-MM-dd`，空字符串表示从未打卡 |
+| `dsApiKey` | string \| null | DeepSeek API Key，**base64 编码后**存储；`null` 表示未配置 |
 
 已有旧配置没有 `lastClockOnDate` 时，会按空字符串处理，下一次打卡会从 1 重新开始。
 
-`appVersion` 目前是代码里写死的默认值，不是安装包真实版本；要精确记录需要用 `package_info_plus` 读取后调用 `AppConfig.setAppVersion()`。
+注意：base64 只是编码不是加密，拿到 `config.json` 就能解回明文。
 
 ## 题库 JSON 格式
 
@@ -233,20 +234,16 @@ build/app/outputs/flutter-apk/app-release.apk
 | 成员 | 说明 |
 | --- | --- |
 | `AppConfig.init()` | 启动时调用，读取或创建 `config.json`，加载到内存 |
-| `AppConfig.appVersion` | 读取当前版本 |
-| `AppConfig.clockOn` | 读取当前累计打卡天数 |
 | `AppConfig.clockOnNotifier` | 打卡天数的 `ValueNotifier<int>`，首页监听它刷新 |
-| `AppConfig.lastClockOnDate` | 上次打卡日期，格式 `yyyy-MM-dd` |
 | `AppConfig.hasCheckedInToday` | 今天是否已经打过卡 |
 | `AppConfig.checkInToday()` | 完成今天打卡：今天已打返回 false；昨天打过则 +1；断签重置为 1 |
-| `AppConfig.setClockOn(int)` | 只改天数、不改日期，仅用于调试，不要拿来做打卡 |
 | `AppConfig.questionBankDirs` | 题库目录的只读快照 |
 | `AppConfig.questionBankDirsNotifier` | 题库目录的 `ValueNotifier<List<String>>`，界面监听它自动刷新 |
-| `AppConfig.setAppVersion(String)` | 修改版本并落盘 |
-| `AppConfig.setQuestionBankDirs(List<String>)` | 整体替换目录并落盘 |
 | `AppConfig.addQuestionBankDir(String)` | 追加目录（去重）并落盘 |
 | `AppConfig.removeQuestionBankDir(String)` | 删除目录并落盘 |
-| `AppConfig.save()` | 手动保存，一般不需要 |
+| `AppConfig.dsApiKey` | 当前 DeepSeek API Key（内存中明文） |
+| `AppConfig.dsApiKeyNotifier` | API Key 的 `ValueNotifier<String?>` |
+| `AppConfig.setDsApiKey(String?)` | 设置或清除 Key，base64 编码后写入 `config.json` |
 
 ### QuestionBankStorage（`lib/services/question_bank_storage.dart`）
 
@@ -256,7 +253,6 @@ build/app/outputs/flutter-apk/app-release.apk
 | `load()` | 复制源文件到文档目录，读取并解析成 `QuestionBank` |
 | `save(QuestionBank)` | 把整份题库写回工作副本，内部串行队列 |
 | `syncBack()` | 把工作副本回拷到源文件，返回是否成功 |
-| `workingPath` | 工作副本路径，调试用 |
 
 ### Saf（`lib/services/saf.dart`）
 
@@ -272,7 +268,6 @@ Android Storage Access Framework 的 Dart 封装，对应原生 `tbank/saf` 通�
 | `Saf.readText(uri)` / `Saf.writeText(uri, text)` | 读写 UTF-8 文本，写入用 `wt` 模式会截断旧内容 |
 | `Saf.readChildBytes(dirUri, name)` | 按文件名读子文件字节，题目配图用 |
 | `Saf.releasePermission(uri)` | 释放目录授权 |
-| `Saf.hasPersistedPermission(uri)` | 检查授权是否仍有效 |
 
 ### BankIo（`lib/services/bank_io.dart`）
 
@@ -285,7 +280,6 @@ Android Storage Access Framework 的 Dart 封装，对应原生 `tbank/saf` 通�
 | `readText(fileRef)` / `writeText(fileRef, text)` | 读写题库 JSON，读取时自动去掉 BOM |
 | `readSiblingBytes(dirRef, name)` | 读同级文件字节（题目配图） |
 | `releaseDirectory(dirRef)` | 释放 SAF 授权；桌面端空操作 |
-| `isDirectoryAvailable(dirRef)` | 检查授权或目录是否还在 |
 | `displayNameOf(dirRef)` | 从引用推导展示名，例如 `content://…/tree/primary%3ABooks` → `Books` |
 
 ### 页面
@@ -296,7 +290,8 @@ Android Storage Access Framework 的 Dart 封装，对应原生 `tbank/saf` 通�
 | `MainScreen._openBank(QuestionBankFile)` | 点击题库后的回调：保存选中项并切到练习 tab |
 | `QuestionBankPage(onOpenBank:)` | 扫描目录，点击文件时把 `QuestionBankFile` 交给父级 |
 | `PracticePage(bank:)` | 接收题库并完成加载、答题、统计、回拷 |
-| `PagePlaceholder(title:, icon:)` | ME 的占位页 |
+| `MePage` | 个人中心，提供「设置」入口 |
+| `SettingsPage` | 设置页（目前只有 DeepSeek 密钥一项） |
 
 ## 页面切换与状态
 
@@ -310,8 +305,9 @@ Android Storage Access Framework 的 Dart 封装，对应原生 `tbank/saf` 通�
 
 ### 1. 完成 ME 页
 
-Home 已经是完整实现（`home_page.dart`：随机背景 + 打卡卡片 + 语录卡），不再走占位页。
-ME 目前仍直接用 `PagePlaceholder`，替换 `MePage.build` 即可，例如读取题库目录数量：
+Home 已经是完整实现（`home_page.dart`：随机背景 + 打卡卡片 + 语录卡）。
+ME 目前只有「设置」一个入口（`me_page.dart` 里的列表项），其余条目可以继续往下追加，
+例如关于、导入导出等：
 
 ```dart
 ValueListenableBuilder<List<String>>(
@@ -319,8 +315,6 @@ ValueListenableBuilder<List<String>>(
   builder: (context, dirs, _) => Text('题库目录：${dirs.length} 个'),
 )
 ```
-
-ME 页可以放设置、关于、导入导出等入口。改完后 `page_placeholder.dart` 就没有使用者了，可以整个删掉。
 
 ### 2. 新增配置项
 

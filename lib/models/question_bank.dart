@@ -120,13 +120,10 @@ class Question {
                   QuestionOption.fromJson(item.cast<String, dynamic>()))
               .toList()
           : <QuestionOption>[],
-      // correctAnswer 统一按数组读取。仅为兼容旧题库保留字符串写法：
-      // 旧的 "B" 会被当成 ["B"]，下次保存时会自动转成数组形态。
+      // correctAnswer 只接受数组；非数组一律视为没有答案
       correctAnswers: rawAnswer is List
           ? rawAnswer.whereType<String>().toList()
-          : rawAnswer is String
-              ? <String>[rawAnswer]
-              : <String>[],
+          : <String>[],
       // 没写或为 null 时按“无解析”处理
       analysis: json['analysis']?.toString().trim() ?? '',
       // stats 缺失时补 0/0，老文件也能正常打开

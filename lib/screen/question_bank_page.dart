@@ -78,15 +78,6 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
 
     for (final String dirRef in dirs) {
       try {
-        // Android 上旧版本存的是绝对路径，SAF 之后已经无法访问
-        if (Saf.isSupported && !BankIo.isSafRef(dirRef)) {
-          errors.add(
-            '「${BankIo.displayNameOf(dirRef)}」是旧版目录记录，'
-            '已不再支持路径访问，请删除后重新添加',
-          );
-          continue;
-        }
-
         final List<QuestionBankFile> found = await BankIo.listJsonFiles(
           dirRef,
           directoryName: BankIo.displayNameOf(dirRef),
@@ -226,7 +217,7 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('题库管理'), // 左上角标题
+        title: const Text('管理'), // 左上角标题
         actions: <Widget>[
           IconButton(
             tooltip: '添加题库目录',
