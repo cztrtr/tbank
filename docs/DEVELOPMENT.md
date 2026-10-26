@@ -25,14 +25,15 @@
   - 单选 `single_choice`
   - 多选 `multiple_choice`
   - 判断 `true_false`
-  - 填空/解释 `fill_blank`（展示答案后由用户自判）
+  - 填空/解释 `fill_blank`（配置了 DeepSeek 密钥时由 AI 判 0-10 分，低于 6 分判错；未配置时退回「展示答案 + 自判」）
+  - 选择题答完后左侧「AI 解析」、右侧「下一题」；AI 解析结果显示在页面最下方的独立框里
   - 题目上方显示该题累计「已作答 / 答错」次数
   - 题目配图：JSON 的 `image` 非空时，从**题库 JSON 所在目录**加载同名图片；选择题显示在选项下方，填空/解释题紧跟题干。文件缺失或无法解码时显示占位框并标出文件名
 - 统计与持久化
   - 每题判分后更新内存统计，并写一次文档目录下的工作副本
   - 整份做完、App 进入后台、页面销毁时，把工作副本回拷到题库所在文件夹
 - 配置
-  - `config.json` 保存 App 版本、题库目录列表、连续打卡天数和上次打卡日期
+  - `config.json` 保存题库目录列表、连续打卡天数、上次打卡日期和 DeepSeek API Key（base64）
   - 配置和目录变化通过 `ValueNotifier` 全局广播
 
 ## 数据流
@@ -282,6 +283,24 @@ Android Storage Access Framework 的 Dart 封装，对应原生 `tbank/saf` 通�
 | `releaseDirectory(dirRef)` | 释放 SAF 授权；桌面端空操作 |
 | `displayNameOf(dirRef)` | 从引用推导展示名，例如 `content://…/tree/primary%3ABooks` → `Books` |
 
+### DsApiService（`lib/services/ds_api_service.dart`）
+
+DeepSeek 对话接口（OpenAI 兼容协议）的封装，模型固定为 `deepseek-flash`。
+API Key 从 `AppConfig.dsApiKey` 读取，未配置时抛 `DsApiException`。
+
+| 成员 | 说明 |
+| --- | --- |
+| `ask(content, stream:, thinking:)` | 通用问答；`thinking` 控制是否启用思考模式 |
+| `scoreAnswer(question:, standardAnswer:, userAnswer:, imageBytes:)` | 给主观题打 0-10 分，供填空/解释题判分 |
+| `explainQuestion(question:, options:, correctAnswer:, imageBytes:)` | 生成选择题解析，供「AI 解析」按钮使用 |
+| `sseDelta(line)` | 解析一行 SSE，区分正文 `content` 与思考过程 `reasoning_content` |
+
+说明：
+
+- 传了 `imageBytes` 时按「文本 + `image_url` 内容块」发送（`_withOptionalImage`），MIME 按文件头判断
+- 所有错误统一转成 `DsApiException`，带中文提示和 HTTP 状态码
+- 没有引入 `dart:io`，因此也可在 Web 端编译
+
 ### 页面
 
 | 类 | 说明 |
@@ -482,7 +501,7 @@ kotlin.incremental=false
 - **同名文件冲突**：不同目录下的同名 `.json` 会映射到文档目录下同一个副本；
 - **强杀进程可能丢最后一次同步**：生命周期回调不保证执行，但工作副本通常是安全的；
 - **同一题库练完后再点一次不会自动重开**：`didUpdateWidget` 比较的是路径，路径没变不会重新加载；可以点完成页的“再练一遍”，或给选择加一个序号；
-- **填空/解释由用户自判**：没有自动判分，统计依赖“答对了 / 答错了”按钮；
+- **填空/解释的判分依赖 DeepSeek**：配置了 Key 时由 AI 打 0-10 分（低于 6 分判错），未配置或请求失败时退回“答对了 / 答错了”自判；AI 判分有模型波动，同一答案分数可能不完全一致；
 - **只扫描目录第一层**：需要递归时把 `dir.list(followLinks: false)` 改为 `recursive: true`；
 - **删除目录记录会带走该目录下所有题库**：列表按文件展示，但删除操作移除的是整个目录记录，同一目录里的其它 `.json` 也会一起从列表消失（文件本身不删）；
 - **界面状态都在页面 State 里**：没有引入 Provider/Riverpod，跨页面共享只通过 AppConfig 的 notifier；
