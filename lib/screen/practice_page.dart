@@ -371,7 +371,7 @@ class _PracticePageState extends State<PracticePage>
   /// 按“未选题库 / 加载中 / 加载失败 / 空题库 / 已完成 / 答题中”分支展示。
   Widget _buildBody(QuestionBankFile? file) {
     if (file == null) {
-      return const Center(child: Text('请先在“题库管理”里选择一个题库'));
+      return const Center(child: Text('请先在“管理”里选择一个题库'));
     }
     if (_loading) {
       return const Center(child: CircularProgressIndicator());
