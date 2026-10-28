@@ -64,6 +64,8 @@ class Question {
     required this.stats,
     this.image = '',
     this.analysis = '',
+    this.origin,
+    this.mistakeScore,
   });
 
   final String id;
@@ -89,6 +91,25 @@ class Question {
   /// 统计对象是可变引用：答题时直接改 attemptCount / wrongCount，
   /// 保存时整份题库序列化会自动带上最新值。
   final QuestionStats stats;
+
+  /// 错题本专用：来源标记，形如 `<原题库文件引用>#<原题目 id>`。
+  ///
+  /// 普通题库里的题目为 null；只有被收进错题本的副本才带这个字段，
+  /// 用于去重，避免同一道题被反复收集。
+  final String? origin;
+
+  /// 错题本专用：还需要答对几次才算「完成」。
+  ///
+  /// 收集进错题本时初始为 5；每次答对 -1、答错 +1，
+  /// 减到 0 或以下即视为已完成（题目仍保留在错题本里）。
+  /// 普通题库里的题目为 null。
+  int? mistakeScore;
+
+  /// 这道题是否来自错题本。
+  bool get isFromMistakeBook => mistakeScore != null;
+
+  /// 错题是否已经「完成」。
+  bool get isMistakeDone => (mistakeScore ?? 0) <= 0;
 
   /// 填空/解释：没有选项，展示答案后由用户自己判断对错。
   bool get isFillBlank => type == QuestionType.fillBlank;
@@ -130,6 +151,11 @@ class Question {
       stats: rawStats is Map
           ? QuestionStats.fromJson(rawStats.cast<String, dynamic>())
           : QuestionStats(),
+      // 这两个字段只出现在错题本文件里，普通题库读出来是 null
+      origin: json['origin']?.toString(),
+      mistakeScore: json['mistakeScore'] is num
+          ? (json['mistakeScore'] as num).toInt()
+          : null,
     );
   }
 
@@ -150,6 +176,9 @@ class Question {
         // 同样必须始终写回，否则答题保存后解析会丢失
         'analysis': analysis,
         'stats': stats.toJson(),
+        // 错题本字段：普通题库不写，保持文件干净
+        if (origin != null) 'origin': origin,
+        if (mistakeScore != null) 'mistakeScore': mistakeScore,
       };
 }
 

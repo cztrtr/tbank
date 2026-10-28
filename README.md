@@ -4,9 +4,9 @@
 
 ![Flutter](https://img.shields.io/badge/Flutter-3.47.7-02569B?logo=flutter&logoColor=white)
 ![Dart](https://img.shields.io/badge/Dart-3.13.5-0175C2?logo=dart&logoColor=white)
-![Platform](https://img.shields.io/badge/Platform-Android-3DDC84?logo=android&logoColor=white)
+![Platform](https://img.shields.io/badge/Platform-Android%20%7C%20Windows-3DDC84?logo=android&logoColor=white)
 
-TBank 是一个用 Flutter 编写的**本地题库练习 App**。题库就是普通的 `.json` 文件，放在手机任意目录即可；App 扫描目录、逐题出题、记录每题累计的作答与答错次数，并在退出时把统计写回原文件。
+TBank 是一个用 Flutter 编写的**本地题库练习 App**，支持 Android 与 Windows 桌面。题库就是普通的 `.json` 文件，放在手机或电脑的任意目录即可；App 扫描目录、逐题出题、记录每题累计的作答与答错次数，并自动把统计写回原文件。
 
 没有账号、没有云端同步、没有埋点。除可选的 AI 功能（需要你自己填 DeepSeek API Key）外，全部离线运行。你的题库和答题记录只存在于你自己的手机上。
 
@@ -42,6 +42,16 @@ TBank 是一个用 Flutter 编写的**本地题库练习 App**。题库就是普
 - 判分后立即高亮正确项和你的错选项
 - 填空/简答题配置了 DeepSeek 密钥后支持 **AI 判分**：输入答案提交，AI 打 0–10 分，低于 6 分判错
 - 选择题答完后可点「**AI 解析**」，让 AI 解释正确答案与各错误选项，结果显示在页面最下方
+
+### 错题本
+
+- 进入「我的 → 错题本」时自动扫描所有已添加的题库，把**答错过的题**复制到 App 私有目录
+- 每 25 题装一本，命名依次是 **24 个希腊字母**（Alpha、Beta……Omega），接着 **十二地支**（子、丑……亥）；36 个用完后加序号再来一轮（Alpha 2、子 2……）
+- 复制时题目 `id` 重新编号为 `C001`、`C002`……，并记录来源避免重复收集
+- 配图会一起复制过来，原题库目录删掉了也不影响错题本
+- 每道错题有一个计数，初始 **5**：答对减 1、答错加 1，减到 0 记为「已完成」
+- 题目**不会从错题本移除**，列表里按本显示「已完成 / 未完成」和 `已完成数/总数`
+- 在错题本里作答只更新计数，**不会回写原题库的统计**
 
 ### 首页
 
@@ -94,17 +104,19 @@ AI 能力默认不启用，需要填自己的 DeepSeek API Key。不配也能正
 - 请求只发往 `https://api.deepseek.com`，不经过任何第三方中转
 - 每次只发送当前题目的题干、选项、标准答案、你的作答（以及该题配图），不会上传整个题库
 
-## 界面
-
-> 截图待补充。建议放 3 张：首页（打卡卡片 + 语录卡）、题库列表、练习界面（含配图题）。
 
 ## 下载安装
 
-从 [Releases](../../releases) 页面下载最新的 APK 安装即可。
+从 [Releases](../../releases) 页面下载最新的安装包：
+
+| 平台 | 文件 | 安装方式 |
+| --- | --- | --- |
+| Android | `TBank-v0.1.6-android.apk` | 直接安装 |
+| Windows | `TBank-v0.1.6-windows-x64.zip` | 解压后运行 `tbank.exe`，无需安装 |
 
 要求：
 
-- Android 7.0（API 24）及以上
+- Android 7.0（API 24）及以上；Windows 10/11 64 位
 - 添加题库时，系统会弹出**文件夹选择器**，选中存放 `.json` 的文件夹并允许访问即可。
   应用只会在这个受权文件夹里读写，可以随时在「题库管理」里移除授权。
 
@@ -122,6 +134,7 @@ AI 能力默认不启用，需要填自己的 DeepSeek API Key。不配也能正
 | Dart | 3.13+ |
 | JDK | 17 |
 | Android SDK | compileSdk 36、build-tools 36.0.0 |
+| Visual Studio | 2022（仅构建 Windows 版需要，含「使用 C++ 的桌面开发」） |
 
 ```bash
 git clone https://github.com/<your-name>/tbank.git
@@ -130,7 +143,7 @@ flutter pub get
 flutter run
 ```
 
-打包正式版 APK（需要先配置签名）：
+打包正式版 APK（需要先配置签名，未配置时会退回 debug 签名）：
 
 ```bash
 flutter build apk --release
@@ -140,7 +153,15 @@ flutter build apk --release --split-per-abi
 
 产物：`build/app/outputs/flutter-apk/app-release.apk`
 
-签名步骤见 [开发文档](docs/DEVELOPMENT.md)。
+打包 Windows 桌面版：
+
+```bash
+flutter build windows --release
+```
+
+产物在 `build/windows/x64/runner/Release/`，把整个目录压缩成 zip 即可分发。
+
+签名步骤和桌面版细节见 [开发文档](docs/DEVELOPMENT.md)。
 
 ## 题库格式
 
@@ -379,16 +400,19 @@ flutter build apk --release --split-per-abi
 
 ```text
 lib/
-├── main.dart                    # 入口、主题
-├── models/                      # 题库数据模型
-├── services/                    # 配置、存储访问（SAF / 文件路径）
-├── screen/                      # 四个主页面
-└── widgets/                     # 语录卡、题目配图、占位页
+├── main.dart                    # 入口、主题、启动时加载配置
+├── models/                      # 题库数据模型（QuestionBank / Question / QuestionStats）
+├── services/                    # 配置、存储访问（SAF / 文件路径）、AI 调用、错题本
+├── screen/                      # 首页、题库管理、练习、我的、设置、错题本
+└── widgets/                     # 语录卡、题目配图
 
 assets/
 ├── images/home_bg/              # 首页随机背景
 ├── texts/quotes.txt             # 首页语录文案
 └── icon/                        # 启动图标源文件
+
+docs/
+└── DEVELOPMENT.md               # 开发文档：数据流、核心类、构建与平台差异
 ```
 
 ## 开发
@@ -404,7 +428,7 @@ assets/
 ## 已知限制
 
 - 只扫描所选目录的**第一层**，不递归
-- 配图始终从题库源目录读取，**不会**随 JSON 复制到 App 私有目录；源目录被删或改名后图片会失效
+- 普通题库的配图始终从题库源目录读取，**不会**随 JSON 复制到 App 私有目录；源目录被删或改名后图片会失效（错题本例外：收集时会把配图一起复制一份）
 - 配图高度上限 320px，超长截图会被缩小
 - 内置背景图占约 48 MB，是安装包体积的主要来源
 - 填空/简答的自动判分**依赖 DeepSeek API**：没配置 Key 或网络不可用时只能手动自判；AI 判分是模型打分，同一答案偶尔可能出现分数波动

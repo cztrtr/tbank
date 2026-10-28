@@ -29,11 +29,11 @@ class QuoteCard extends StatefulWidget {
 }
 
 class _QuoteCardState extends State<QuoteCard> {
-  final Random _random = Random();
+  final Random _random = Random(); // 随机数生成器：启动抽一句、点击换一句
 
-  List<String> _lines = const <String>[];
-  int _index = 0;
-  bool _loaded = false;
+  List<String> _lines = const <String>[]; // 解析后的语录，已去掉空行和 # 注释
+  int _index = 0; // 当前显示的语录下标
+  bool _loaded = false; // 资源是否已加载完（失败也算加载完，避免一直转圈）
 
   @override
   void initState() {

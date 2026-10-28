@@ -42,6 +42,13 @@ class _PracticePageState extends State<PracticePage>
 
   int _index = 0; // 当前第几题（从 0 开始）
   final Set<String> _selected = <String>{}; // 选择题当前选中了哪些选项
+
+  /// 本次练习已作答的题目：下标 → (是否答对, 当时的选择)。
+  ///
+  /// 「上一题 / 下一题」来回切换时用它恢复判分结果，
+  /// 避免同一道题被重复提交、把统计重复加进原题库 JSON。
+  final Map<int, ({bool correct, Set<String> selected})> _answeredStates =
+      <int, ({bool correct, Set<String> selected})>{};
   bool _showAnswer = false; // 填空/解释是否已展示答案
   bool _answered = false; // 当前题是否已经判定过
   bool _wasCorrect = false; // 当前题答得对不对
@@ -123,6 +130,7 @@ class _PracticePageState extends State<PracticePage>
       _index = 0;
       _answeredCount = 0;
       _correctCount = 0;
+      _answeredStates.clear();
       _resetQuestionState();
     });
 
@@ -175,11 +183,22 @@ class _PracticePageState extends State<PracticePage>
       question.stats.wrongCount += 1; // 只有答错才累计错误数
     }
 
+    // 错题本里的题：答对 -1、答错 +1，减到 0 即完成（题目保留，不移出）
+    final int? mistakeScore = question.mistakeScore;
+    if (mistakeScore != null) {
+      question.mistakeScore = mistakeScore + (correct ? -1 : 1);
+    }
+
     setState(() {
       _answered = true;
       _wasCorrect = correct;
       _answeredCount += 1;
       if (correct) _correctCount += 1;
+      // 记住这题的判分结果，供「上一题」返回时恢复
+      _answeredStates[_index] = (
+        correct: correct,
+        selected: Set<String>.of(_selected),
+      );
     });
 
     // 每答完一题就写一次文档目录下的副本，不做防抖
@@ -285,6 +304,13 @@ class _PracticePageState extends State<PracticePage>
 
     try {
       await storage.save(bank);
+
+      // 错题本的源文件就在 App 私有目录，写入成本极低：
+      // 每题都把工作副本回写到源文件，避免退回列表时读到还没同步的旧数据。
+      // （普通题库不这样做：源文件在用户目录里，频繁写代价高）
+      if (bank.questions.any((Question q) => q.isFromMistakeBook)) {
+        await storage.syncBack();
+      }
     } catch (error) {
       debugPrint('保存工作副本失败：$error');
     }
@@ -326,9 +352,34 @@ class _PracticePageState extends State<PracticePage>
       return;
     }
 
+    _goTo(_index + 1);
+  }
+
+  /// 上一题；已经是第一题就不动（按钮此时禁用）。
+  void _previous() {
+    if (_index <= 0) return;
+    _goTo(_index - 1);
+  }
+
+  /// 跳到指定题。
+  ///
+  /// 这题如果已经答过，恢复当时的判分结果和选择，让它变成只读的回顾状态：
+  /// 不再出现提交按钮，因此不会重复计数、也不会改动原题库的统计。
+  void _goTo(int index) {
+    final answered = _answeredStates[index];
+
     setState(() {
-      _index += 1;
+      _index = index;
       _resetQuestionState();
+
+      if (answered != null) {
+        _answered = true;
+        _wasCorrect = answered.correct;
+        _showAnswer = true; // 填空/解释：直接显示参考答案
+        _selected
+          ..clear()
+          ..addAll(answered.selected);
+      }
     });
   }
 
@@ -353,6 +404,7 @@ class _PracticePageState extends State<PracticePage>
       _answeredCount = 0;
       _correctCount = 0;
       _syncMessage = null;
+      _answeredStates.clear();
       _resetQuestionState();
     });
   }
@@ -512,14 +564,24 @@ class _PracticePageState extends State<PracticePage>
           // AI 解析结果固定在页面最下方
           if (!question.isFillBlank) ..._buildAiAnalysis(question),
         ] else if (!question.isFillBlank) ...<Widget>[
-          // 未判分的选择题：选中至少一项才能提交
+          // 未判分的选择题：左边「上一题」，右边「提交答案」
           const SizedBox(height: 16),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton(
-              onPressed: _selected.isEmpty ? null : _submitChoice,
-              child: const Text('提交答案'),
-            ),
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: _index > 0 ? _previous : null,
+                  child: const Text('上一题'),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: FilledButton(
+                  onPressed: _selected.isEmpty ? null : _submitChoice,
+                  child: const Text('提交答案'),
+                ),
+              ),
+            ],
           ),
         ],
       ],
@@ -610,18 +672,29 @@ class _PracticePageState extends State<PracticePage>
         ),
       ),
       const SizedBox(height: 12),
-      SizedBox(
-        width: double.infinity,
-        child: FilledButton(
-          onPressed: canSubmit ? () => _submitWithAi(question) : null,
-          child: _grading
-              ? const SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Text('提交'),
-        ),
+      // 左边「上一题」，右边「提交」（交给 AI 判分）
+      Row(
+        children: <Widget>[
+          Expanded(
+            child: OutlinedButton(
+              onPressed: _index > 0 ? _previous : null,
+              child: const Text('上一题'),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: FilledButton(
+              onPressed: canSubmit ? () => _submitWithAi(question) : null,
+              child: _grading
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('提交'),
+            ),
+          ),
+        ],
       ),
     ];
   }
@@ -630,13 +703,24 @@ class _PracticePageState extends State<PracticePage>
   List<Widget> _buildFillBlankManual(Question question) {
     return <Widget>[
       if (!_showAnswer)
-        SizedBox(
-          width: double.infinity,
-          child: OutlinedButton(
-            onPressed:
-                _answered ? null : () => setState(() => _showAnswer = true),
-            child: const Text('展示答案'),
-          ),
+        // 左边「上一题」，右边「展示答案」
+        Row(
+          children: <Widget>[
+            Expanded(
+              child: OutlinedButton(
+                onPressed: _index > 0 ? _previous : null,
+                child: const Text('上一题'),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: OutlinedButton(
+                onPressed:
+                    _answered ? null : () => setState(() => _showAnswer = true),
+                child: const Text('展示答案'),
+              ),
+            ),
+          ],
         )
       else ...<Widget>[
         Container(
@@ -716,6 +800,16 @@ class _PracticePageState extends State<PracticePage>
             const SizedBox(height: 4),
             Text(
               'AI 评分：$_aiScore / 10',
+              style: TextStyle(color: foreground),
+            ),
+          ],
+          // 错题本里的题额外显示「还差几次」的进度
+          if (question.isFromMistakeBook) ...<Widget>[
+            const SizedBox(height: 4),
+            Text(
+              question.isMistakeDone
+                  ? '错题本：已完成'
+                  : '错题本：还需答对 ${question.mistakeScore} 次',
               style: TextStyle(color: foreground),
             ),
           ],
@@ -854,7 +948,8 @@ class _PracticePageState extends State<PracticePage>
   }
 
   /// 把正确答案转成适合展示的文字：选择题带上选项内容。
-  String _answerText(Question question) {    if (question.isFillBlank) {
+  String _answerText(Question question) {
+    if (question.isFillBlank) {
       return question.correctAnswers.join(' / ');
     }
 

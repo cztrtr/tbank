@@ -13,8 +13,8 @@ class SettingsPage extends StatefulWidget {
 }
 
 class _SettingsPageState extends State<SettingsPage> {
-  final TextEditingController _keyController = TextEditingController();
-  bool _saving = false;
+  final TextEditingController _keyController = TextEditingController(); // 密钥输入框
+  bool _saving = false; // 是否正在保存，防止重复提交
 
   @override
   void dispose() {

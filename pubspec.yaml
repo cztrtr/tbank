@@ -34,7 +34,8 @@ flutter:
 # 启动图标：由一张 1024x1024 的 PNG 生成各平台尺寸
 flutter_launcher_icons:
   android: true
-  ios: true
+  # iOS 平台目录已移除；以后若重新执行 `flutter create --platforms=ios .`，
+  # 再把这里改回 true 并补回 remove_alpha_ios
+  ios: false
   image_path: "assets/icon/app_icon.png"
-  remove_alpha_ios: true
   min_sdk_android: 21

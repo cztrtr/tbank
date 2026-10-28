@@ -35,6 +35,7 @@ class _MainScreenState extends State<MainScreen> {
   Widget build(BuildContext context) {
     // 每次重建都把最新的选中题库传给 PracticePage，
     // 这样题库页 emit 新选择后，练习页能通过 didUpdateWidget 感知。
+    // 页面实例在这里重新创建，但 IndexedStack 会按位置复用各自的 State。
     final pages = <Widget>[
       const HomePage(),
       QuestionBankPage(onOpenBank: _openBank),

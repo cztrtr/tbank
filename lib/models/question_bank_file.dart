@@ -2,7 +2,7 @@
 ///
 /// 题库可能来自两种存储：
 /// - Android：SAF 授权的目录，`uri` 是 `content://` 形式的 document URI；
-/// - 桌面（Windows / Linux / macOS）：普通文件系统，`uri` 是绝对路径。
+/// - 桌面（Windows，模板保留 macOS）：普通文件系统，`uri` 是绝对路径。
 ///
 /// 上层统一通过 `BankIo` 访问，不直接碰文件系统。
 class QuestionBankFile {

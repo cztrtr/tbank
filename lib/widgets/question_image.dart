@@ -39,6 +39,10 @@ class QuestionImage extends StatefulWidget {
 }
 
 class _QuestionImageState extends State<QuestionImage> {
+  /// 当前图片的读取任务；为 null 表示文件名或目录缺失，直接不加载。
+  ///
+  /// 缓存 Future 而不是字节，是为了让 FutureBuilder 在重建时复用同一次读取，
+  /// 不会因为 setState 反复触发 IO。
   Future<Uint8List?>? _future;
 
   @override

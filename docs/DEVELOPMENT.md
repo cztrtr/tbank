@@ -4,11 +4,14 @@
 
 题库是普通的 `.json` 文件，可以放在手机存储的任意目录；App 负责扫描目录、读取题目、记录每题累计作答/答错次数，并把统计回写到原文件。
 
-> 当前状态：题库管理、练习（含题目配图）、本地统计、首页打卡卡片与语录卡、ME 页设置入口已实现；设置页目前只有 DeepSeek 密钥一项。
+> 当前状态：题库管理、练习（含题目配图、AI 判分 / AI 解析）、本地统计、错题本、
+> 首页打卡卡片与语录卡、设置页均已实现。设置页目前只有 DeepSeek 密钥一项。
+> 平台支持 Android（SAF 授权目录）与 Windows 桌面（普通文件路径）。
+> iOS / Linux 平台目录已移除；需要时用 `flutter create --platforms=ios,linux .` 重新生成模板。
 
 ## 功能
 
-- 底部导航：`Home` / `题库管理` / `练习` / `ME`
+- 底部导航：`首页` / `管理` / `练习` / `我的`
 - 首页
   - 每次启动从 `assets/images/home_bg/` 随机选择一张背景图，使用 `BoxFit.cover` 等比铺满
   - 顶部居中的圆角正方形打卡卡片（半透明毛玻璃）：显示「打卡」、累计天数、日期
@@ -29,6 +32,13 @@
   - 选择题答完后左侧「AI 解析」、右侧「下一题」；AI 解析结果显示在页面最下方的独立框里
   - 题目上方显示该题累计「已作答 / 答错」次数
   - 题目配图：JSON 的 `image` 非空时，从**题库 JSON 所在目录**加载同名图片；选择题显示在选项下方，填空/解释题紧跟题干。文件缺失或无法解码时显示占位框并标出文件名
+- 错题本
+  - 「我的 → 错题本」进入二级页面，打开时先扫描所有题库目录，把 `stats.wrongCount > 0` 的题复制到 App 私有目录的 `mistakes/`
+  - 每本 25 题，命名顺序：24 个希腊字母（Alpha…Omega）→ 十二地支（子…亥）→ 加序号再来一轮（Alpha 2、子 2……），共 36 个一轮
+  - 题目 `id` 重编号为 `C001`…，并写入 `origin`（`<原文件引用>#<原题 id>`）用于去重、`mistakeScore`（初始 5）
+  - 配图复制到 `mistakes/` 并按新编号重命名，错题本不依赖原题库目录
+  - 作答时 `mistakeScore` 答对 -1、答错 +1，减到 0 视为完成；**题目保留不移除**，列表显示「已完成 / 未完成」
+  - 错题本内作答不回写原题库统计
 - 统计与持久化
   - 每题判分后更新内存统计，并写一次文档目录下的工作副本
   - 整份做完、App 进入后台、页面销毁时，把工作副本回拷到题库所在文件夹
@@ -70,12 +80,14 @@ lib/
 │   ├── question_bank_storage.dart  # 读取/保存/回拷题库文件
 │   ├── bank_io.dart                # 存储访问统一入口（SAF / 文件路径）
 │   ├── saf.dart                    # Android SAF 通道封装
-│   └── ds_api_service.dart         # DeepSeek API 调用
+│   ├── ds_api_service.dart         # DeepSeek API 调用
+│   └── mistake_books.dart          # 错题本收集、分本、计数
 ├── screen/
 │   ├── main_screen.dart            # 底部导航 + IndexedStack
 │   ├── home_page.dart              # 随机背景 + 打卡卡片
 │   ├── question_bank_page.dart     # 目录选择、扫描、题库列表
 │   ├── practice_page.dart          # 练习界面与答题逻辑
+│   ├── mistake_books_page.dart     # 错题本二级页面
 │   ├── me_page.dart                # 个人中心，提供设置入口
 │   └── settings_page.dart          # 设置页
 └── widgets/
@@ -90,6 +102,7 @@ lib/
 - Flutter 3.47+ / Dart 3.13+
 - Android SDK 36（`compileSdk` 使用 Flutter 默认值）
 - JDK 17+
+- Visual Studio 2022（仅构建 Windows 桌面版需要，需勾选「使用 C++ 的桌面开发」）
 
 ```bash
 cd tbank
@@ -109,7 +122,45 @@ flutter build apk --release
 build/app/outputs/flutter-apk/app-release.apk
 ```
 
-目前 release 仍使用 debug 签名（`android/app/build.gradle.kts` 中配置），可以直接安装测试，但不能上传 Google Play；正式发布需要生成 keystore 并配置 `signingConfigs`。
+签名由 `android/app/build.gradle.kts` 控制：存在 `android/key.properties` 时使用正式签名，
+不存在时自动退回 debug 签名（方便本地直接 `flutter run --release`）。
+debug 签名的包可以安装测试，但不能上架商店。
+
+正式签名步骤：
+
+1. 生成 keystore：
+
+   ```bash
+   keytool -genkey -v -keystore tbank-release.jks -keyalg RSA \
+     -keysize 2048 -validity 10000 -alias tbank
+   ```
+
+2. 在 `android/key.properties` 写入（该文件和 keystore 已在 `.gitignore` 中）：
+
+   ```properties
+   storeFile=D:/keys/tbank-release.jks
+   storePassword=你的仓库密码
+   keyAlias=tbank
+   keyPassword=你的密钥密码
+   ```
+
+3. 重新执行 `flutter build apk --release`，用 `apksigner verify --print-certs` 确认签名。
+
+### Windows 桌面版
+
+```bash
+flutter build windows --release
+```
+
+输出目录：
+
+```text
+build/windows/x64/runner/Release/
+```
+
+该目录里的 `tbank.exe`、`flutter_windows.dll`、`data/` 必须一起分发，
+打包时把整个 `Release/` 目录压成 zip 即可。桌面端不申请任何系统权限，
+题库目录用 `file_picker` 选择，读写走普通文件路径（见下文「桌面端」）。
 
 ## 配置文件
 
@@ -301,6 +352,21 @@ API Key 从 `AppConfig.dsApiKey` 读取，未配置时抛 `DsApiException`。
 - 所有错误统一转成 `DsApiException`，带中文提示和 HTTP 状态码
 - 没有引入 `dart:io`，因此也可在 Web 端编译
 
+### MistakeBooks（`lib/services/mistake_books.dart`）
+
+错题本的收集与统计。文件放在 App Support 目录的 `mistakes/` 下，每本一个
+`Alpha.json` 这样的文件，配图按错题编号重命名后放在同一目录。
+
+| 成员 | 说明 |
+| --- | --- |
+| `perBook` | 一本最多 25 题 |
+| `initialScore` | 收进错题本时的初始 `mistakeScore`（5） |
+| `directory()` | 返回 `mistakes/` 目录，不存在则创建 |
+| `list()` | 列出所有本子及各自「已完成 / 总数」，按 Alpha、Beta…… 排序 |
+| `collectFromBanks()` | 扫描所有题库，把 `wrongCount > 0` 且未收集过的题复制进来，返回新增数 |
+
+去重键是 `origin = '<原题库文件引用>#<原题 id>'`；编号 `C001` 由已有本子里的最大编号递增得出。
+
 ### 页面
 
 | 类 | 说明 |
@@ -309,8 +375,9 @@ API Key 从 `AppConfig.dsApiKey` 读取，未配置时抛 `DsApiException`。
 | `MainScreen._openBank(QuestionBankFile)` | 点击题库后的回调：保存选中项并切到练习 tab |
 | `QuestionBankPage(onOpenBank:)` | 扫描目录，点击文件时把 `QuestionBankFile` 交给父级 |
 | `PracticePage(bank:)` | 接收题库并完成加载、答题、统计、回拷 |
-| `MePage` | 个人中心，提供「设置」入口 |
+| `MePage` | 个人中心，提供「错题本」「设置」两个入口 |
 | `SettingsPage` | 设置页（目前只有 DeepSeek 密钥一项） |
+| `MistakeBooksPage` | 错题本二级页面：进入时收集并列出 Alpha、Beta…… 各本 |
 
 ## 页面切换与状态
 
@@ -322,11 +389,11 @@ API Key 从 `AppConfig.dsApiKey` 读取，未配置时抛 `DsApiException`。
 
 ## 继续开发指南
 
-### 1. 完成 ME 页
+### 1. 扩展 ME 页
 
-Home 已经是完整实现（`home_page.dart`：随机背景 + 打卡卡片 + 语录卡）。
-ME 目前只有「设置」一个入口（`me_page.dart` 里的列表项），其余条目可以继续往下追加，
-例如关于、导入导出等：
+首页已经是完整实现（`home_page.dart`：随机背景 + 打卡卡片 + 语录卡）。
+ME 目前有「错题本」「设置」两个入口（`me_page.dart` 里的列表项），
+其余条目可以继续往下追加，例如关于、导入导出等：
 
 ```dart
 ValueListenableBuilder<List<String>>(
@@ -440,8 +507,9 @@ Google Play 也需要人工申报审核。改用 SAF 后：
 
 ### 桌面端
 
-Windows / Linux / macOS 仍然用普通文件路径：`BankIo` 检测到引用不以
+Windows 桌面仍然用普通文件路径：`BankIo` 检测到引用不以
 `content://` 开头就走 `dart:io`，目录选择继续用 `file_picker`。
+（`macos/` 模板保留但未做适配验证，发布只覆盖 Windows。）
 
 ### 平台限制
 
@@ -450,8 +518,8 @@ Windows / Linux / macOS 仍然用普通文件路径：`BankIo` 检测到引用�
   移除记录再重新添加即可恢复；
 - Android 上旧版本存的绝对路径已无法访问，升级后会提示「旧版目录记录已失效」，
   需要删除后重新添加（题库文件本身不受影响）；
-- iOS 上 `file_picker` 只能拿到临时路径，长期使用需要接入
-  `UIDocumentPicker` + security-scoped bookmark，目前未适配。
+- iOS / Linux 平台目录已从仓库移除，工具链里不再包含对应 runner；
+  重新加回时执行 `flutter create --platforms=ios,linux .` 即可，`lib/` 代码不受影响。
 
 ## 构建环境注意事项
 
