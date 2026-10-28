@@ -7,7 +7,8 @@
 > 当前状态：题库管理、练习（含题目配图、AI 判分 / AI 解析）、本地统计、错题本、
 > 首页打卡卡片与语录卡、设置页均已实现。设置页目前只有 DeepSeek 密钥一项。
 > 平台支持 Android（SAF 授权目录）与 Windows 桌面（普通文件路径）。
-> iOS / Linux 平台目录已移除；需要时用 `flutter create --platforms=ios,linux .` 重新生成模板。
+> iOS / Linux / macOS / Web 平台目录已移除；需要时用
+> `flutter create --platforms=ios,linux,macos,web .` 重新生成模板。
 
 ## 功能
 
@@ -350,7 +351,7 @@ API Key 从 `AppConfig.dsApiKey` 读取，未配置时抛 `DsApiException`。
 
 - 传了 `imageBytes` 时按「文本 + `image_url` 内容块」发送（`_withOptionalImage`），MIME 按文件头判断
 - 所有错误统一转成 `DsApiException`，带中文提示和 HTTP 状态码
-- 没有引入 `dart:io`，因此也可在 Web 端编译
+- 没有引入 `dart:io`，保持与平台无关的纯 Dart 依赖，便于复用
 
 ### MistakeBooks（`lib/services/mistake_books.dart`）
 
@@ -509,7 +510,6 @@ Google Play 也需要人工申报审核。改用 SAF 后：
 
 Windows 桌面仍然用普通文件路径：`BankIo` 检测到引用不以
 `content://` 开头就走 `dart:io`，目录选择继续用 `file_picker`。
-（`macos/` 模板保留但未做适配验证，发布只覆盖 Windows。）
 
 ### 平台限制
 
@@ -518,8 +518,8 @@ Windows 桌面仍然用普通文件路径：`BankIo` 检测到引用不以
   移除记录再重新添加即可恢复；
 - Android 上旧版本存的绝对路径已无法访问，升级后会提示「旧版目录记录已失效」，
   需要删除后重新添加（题库文件本身不受影响）；
-- iOS / Linux 平台目录已从仓库移除，工具链里不再包含对应 runner；
-  重新加回时执行 `flutter create --platforms=ios,linux .` 即可，`lib/` 代码不受影响。
+- iOS / Linux / macOS / Web 平台目录已从仓库移除，工具链里不再包含对应 runner；
+  重新加回时执行 `flutter create --platforms=ios,linux,macos,web .` 即可，`lib/` 代码不受影响。
 
 ## 构建环境注意事项
 

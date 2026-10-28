@@ -111,8 +111,8 @@ AI 能力默认不启用，需要填自己的 DeepSeek API Key。不配也能正
 
 | 平台 | 文件 | 安装方式 |
 | --- | --- | --- |
-| Android | `TBank-v0.1.6-android.apk` | 直接安装 |
-| Windows | `TBank-v0.1.6-windows-x64.zip` | 解压后运行 `tbank.exe`，无需安装 |
+| Android | `TBank-v0.1.7-android.apk` | 直接安装 |
+| Windows | `TBank-v0.1.7-windows-x64.zip` | 解压后运行 `tbank.exe`，无需安装 |
 
 要求：
 
