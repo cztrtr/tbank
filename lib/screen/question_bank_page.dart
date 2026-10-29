@@ -135,9 +135,8 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
 
       // 已经在列表里就不重复添加，避免重复扫描
       if (AppConfig.questionBankDirsNotifier.value.contains(dirRef)) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('目录「$dirName」已经在列表里了')),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('目录「$dirName」已经在列表里了')));
         return;
       }
 
@@ -145,15 +144,13 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
       await AppConfig.addQuestionBankDir(dirRef);
       if (!mounted) return;
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('已添加目录：$dirName')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('已添加目录：$dirName')));
     } catch (error) {
       // 选择器异常、授权失败等，提示用户而不是静默失败
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('添加题库目录失败：$error')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('添加题库目录失败：$error')));
     } finally {
       if (mounted) setState(() => _isPicking = false);
     }
@@ -199,16 +196,16 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
     if (!mounted) return;
 
     // 还有别的目录记录指向同一位置时，不能撤销授权
-    final bool stillUsed =
-        AppConfig.questionBankDirsNotifier.value.contains(dirRef);
+    final bool stillUsed = AppConfig.questionBankDirsNotifier.value.contains(
+      dirRef,
+    );
     if (!stillUsed) {
       await BankIo.releaseDirectory(dirRef);
     }
     if (!mounted) return;
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('已移除目录，题库文件未被删除')),
-    );
+    ScaffoldMessenger.of(context)
+        .showSnackBar(const SnackBar(content: Text('已移除目录，题库文件未被删除')));
   }
 
   @override
@@ -261,15 +258,9 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
                 color: colorScheme.outline,
               ),
               const SizedBox(height: 12),
-              Text(
-                _scanError!,
-                textAlign: TextAlign.center,
-              ),
+              Text(_scanError!, textAlign: TextAlign.center),
               const SizedBox(height: 16),
-              FilledButton(
-                onPressed: _scanFiles,
-                child: const Text('重新扫描'),
-              ),
+              FilledButton(onPressed: _scanFiles, child: const Text('重新扫描')),
             ],
           ),
         ),
@@ -318,55 +309,108 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
           ),
         ),
 
-        // 题库按钮列表
+        // 按题库所在文件夹分组：文件夹名在上方，题库缩进列在下面
         Expanded(
-          child: ListView.separated(
-            padding: const EdgeInsets.all(16),
-            itemCount: _files.length,
-            separatorBuilder: (BuildContext context, int index) =>
-                const SizedBox(height: 10),
-            itemBuilder: (BuildContext context, int index) {
-              final QuestionBankFile file = _files[index];
-
-              return Row(
-                children: <Widget>[
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      // 把选中的题库交给父页面；MainScreen 会切到练习页
-                      onPressed: () => widget.onOpenBank(file),
-                      icon: const Icon(Icons.description_outlined),
-                      label: Text(
-                        file.name, // 只显示文件名，例如 高数第一章.json
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 14,
-                        ),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 4),
-                  IconButton(
-                    tooltip: '移除该题库目录',
-                    // 只删配置记录和目录授权，不删文件
-                    onPressed: () => _removeDirectoryFor(file),
-                    icon: Icon(
-                      Icons.delete_outline,
-                      color: colorScheme.error,
-                    ),
-                  ),
-                ],
-              );
-            },
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+            children: _buildGroupedList(colorScheme),
           ),
         ),
       ],
     );
+  }
+
+  /// 把扫描结果按目录分组，渲染成「文件夹名 + 题库列表」。
+  ///
+  /// 组的顺序跟随 `_files`（目录添加顺序），组内仍按文件名排序。
+  /// 删除按钮放在文件夹标题右侧：移除的是整个目录记录，不是单个题库。
+  List<Widget> _buildGroupedList(ColorScheme colorScheme) {
+    final Map<String, List<QuestionBankFile>> groups =
+        <String, List<QuestionBankFile>>{};
+    for (final QuestionBankFile file in _files) {
+      groups
+          .putIfAbsent(file.directoryRef, () => <QuestionBankFile>[])
+          .add(file);
+    }
+
+    final List<Widget> children = <Widget>[];
+
+    for (final MapEntry<String, List<QuestionBankFile>> group
+        in groups.entries) {
+      final List<QuestionBankFile> files = group.value;
+      final String dirName =
+          files.first.directoryName ?? BankIo.displayNameOf(group.key);
+
+      children.add(
+        Padding(
+          padding: const EdgeInsets.fromLTRB(0, 14, 0, 6),
+          child: Row(
+            children: <Widget>[
+              Icon(
+                Icons.folder_outlined,
+                size: 18,
+                color: colorScheme.onSurfaceVariant,
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  dirName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+              IconButton(
+                tooltip: '移除该题库目录',
+                // 只删配置记录和目录授权，不删磁盘上的文件
+                onPressed: () => _removeDirectoryFor(files.first),
+                icon: Icon(
+                  Icons.delete_outline,
+                  size: 20,
+                  color: colorScheme.error,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+
+      for (final QuestionBankFile file in files) {
+        children.add(
+          Padding(
+            padding: const EdgeInsets.only(left: 12, bottom: 8),
+            child: SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                // 把选中的题库交给父页面；MainScreen 会切到练习页
+                onPressed: () => widget.onOpenBank(file),
+                icon: const Icon(Icons.description_outlined),
+                label: Text(
+                  file.displayName, // 只显示题库名，不带 .json 后缀
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                style: OutlinedButton.styleFrom(
+                  alignment: Alignment.centerLeft,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 14,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      }
+    }
+
+    return children;
   }
 }

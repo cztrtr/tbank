@@ -48,11 +48,11 @@ class MistakeBookInfo {
   /// `name` 只用于 Documents 目录下的工作副本，加前缀避免和用户自己的
   /// 同名题库（例如他恰好也有个 `Alpha.json`）撞车；源文件始终是 `path`。
   QuestionBankFile toBankFile(String directoryPath) => QuestionBankFile(
-        name: '错题本-$name.json',
-        uri: path,
-        directoryRef: directoryPath,
-        directoryName: '错题本',
-      );
+    name: '错题本-$name.json',
+    uri: path,
+    directoryRef: directoryPath,
+    directoryName: '错题本',
+  );
 }
 
 /// 错题本的读取、收集与统计。
@@ -65,28 +65,55 @@ class MistakeBooks {
   /// 刚收进错题本时「还需要答对几次」。
   static const int initialScore = 5;
 
-  /// 本子命名顺序：先占满 24 个希腊字母，再接十二地支；
-  /// 一轮用完后加序号（Alpha 2、子 2……）。
+  /// 记录「已删除来源」的清单文件名（不含 `.json`）。
+  static const String _deletedBaseName = 'deleted_origins';
+
+  /// 本子命名顺序：24 个希腊字母（Alpha…Omega），一轮用完后加序号
+  /// （Alpha 2、Beta 2……）。不再使用汉字命名。
   static const List<String> _names = <String>[
-    // 希腊字母（24 个）
-    'Alpha', 'Beta', 'Gamma', 'Delta', 'Epsilon', 'Zeta',
-    'Eta', 'Theta', 'Iota', 'Kappa', 'Lambda', 'Mu',
-    'Nu', 'Xi', 'Omicron', 'Pi', 'Rho', 'Sigma',
-    'Tau', 'Upsilon', 'Phi', 'Chi', 'Psi', 'Omega',
-    // 十二地支（12 个）
-    '子', '丑', '寅', '卯', '辰', '巳',
-    '午', '未', '申', '酉', '戌', '亥',
+    'Alpha',
+    'Beta',
+    'Gamma',
+    'Delta',
+    'Epsilon',
+    'Zeta',
+    'Eta',
+    'Theta',
+    'Iota',
+    'Kappa',
+    'Lambda',
+    'Mu',
+    'Nu',
+    'Xi',
+    'Omicron',
+    'Pi',
+    'Rho',
+    'Sigma',
+    'Tau',
+    'Upsilon',
+    'Phi',
+    'Chi',
+    'Psi',
+    'Omega',
   ];
 
-  static String _nameFor(int index) {
-    final int cycle = index ~/ _names.length;
-    final String base = _names[index % _names.length];
-    return cycle == 0 ? base : '$base ${cycle + 1}';
+  /// 按顺序找出第一个还没被占用的本名。
+  ///
+  /// 不能用「现有本子数量」推名字：删除中间某本后再新建，
+  /// 按数量推算会与已有本子重名，写回时把那一本的数据覆盖掉。
+  static String _nextName(Set<String> used) {
+    for (int cycle = 1; ; cycle++) {
+      for (final String base in _names) {
+        final String name = cycle == 1 ? base : '$base $cycle';
+        if (!used.contains(name)) return name;
+      }
+    }
   }
 
-  /// 本子的排序权重，保证 Alpha……Omega、子……亥 按期望顺序排列。
+  /// 本子的排序权重，保证 Alpha……Omega 按期望顺序排列。
   ///
-  /// 兼容带序号的名字（`Alpha 2`、`子 2`）。
+  /// 兼容带序号的名字（`Alpha 2`）；无法识别的旧名字
+  /// （例如早期版本的汉字本）统一排在最后。
   static int _orderOf(String name) {
     // 先尝试拆出末尾的轮次序号
     final int space = name.lastIndexOf(' ');
@@ -130,12 +157,14 @@ class MistakeBooks {
         if (raw is num && raw.toInt() <= 0) completed++;
       }
 
-      books.add(MistakeBookInfo(
-        name: book.name,
-        path: file.path,
-        total: book.questions.length,
-        completed: completed,
-      ));
+      books.add(
+        MistakeBookInfo(
+          name: book.name,
+          path: file.path,
+          total: book.questions.length,
+          completed: completed,
+        ),
+      );
     }
     return books;
   }
@@ -150,6 +179,7 @@ class MistakeBooks {
     // 1. 读出现有本子：已收集的来源、最大错题编号
     final List<_BookData> books = <_BookData>[];
     final Set<String> knownOrigins = <String>{};
+    final Set<String> deletedOrigins = await _loadDeletedOrigins(dir);
     int maxNumber = 0;
 
     for (final File file in _jsonFiles(dir)) {
@@ -161,8 +191,8 @@ class MistakeBooks {
         final String origin = question['origin']?.toString() ?? '';
         if (origin.isNotEmpty) knownOrigins.add(origin);
 
-        final RegExpMatch? match =
-            RegExp(r'^C(\d+)$').firstMatch(question['id']?.toString() ?? '');
+        final RegExpMatch? match = RegExp(r'^C(\d+)$')
+            .firstMatch(question['id']?.toString() ?? '');
         if (match != null) {
           final int number = int.parse(match.group(1)!);
           if (number > maxNumber) maxNumber = number;
@@ -194,8 +224,7 @@ class MistakeBooks {
 
         for (final dynamic item in rawQuestions) {
           if (item is! Map) continue;
-          final Map<String, dynamic> question =
-              Map<String, dynamic>.from(item);
+          final Map<String, dynamic> question = Map<String, dynamic>.from(item);
 
           // 只收答错过的题
           final dynamic stats = question['stats'];
@@ -205,6 +234,8 @@ class MistakeBooks {
           if (wrongCount <= 0) continue;
 
           final String origin = '${bankFile.uri}#${question['id']}';
+          // 用户主动删过的那本，不再自动收回来；否则删完下次进入又出现
+          if (deletedOrigins.contains(origin)) continue;
           if (!knownOrigins.add(origin)) continue; // 已收集过
 
           maxNumber++;
@@ -228,8 +259,9 @@ class MistakeBooks {
     if (pending.isEmpty) return 0;
 
     // 3. 先填已有本子的空位，剩下的按每本 25 题新建
-    final List<Map<String, dynamic>> remaining =
-        List<Map<String, dynamic>>.of(pending);
+    final List<Map<String, dynamic>> remaining = List<Map<String, dynamic>>.of(
+      pending,
+    );
 
     for (final _BookData book in books) {
       while (book.questions.length < perBook && remaining.isNotEmpty) {
@@ -238,14 +270,18 @@ class MistakeBooks {
       if (remaining.isEmpty) break;
     }
 
-    int nextIndex = books.length;
+    // 从已占用的名字里找下一个空位：删过本子也不会撞名
+    final Set<String> usedNames = books
+        .map((_BookData book) => book.name)
+        .toSet();
     while (remaining.isNotEmpty) {
       final List<Map<String, dynamic>> slice = <Map<String, dynamic>>[];
       while (slice.length < perBook && remaining.isNotEmpty) {
         slice.add(remaining.removeAt(0));
       }
-      books.add(_BookData(name: _nameFor(nextIndex), questions: slice));
-      nextIndex++;
+      final String name = _nextName(usedNames);
+      usedNames.add(name);
+      books.add(_BookData(name: name, questions: slice));
     }
 
     // 4. 写回所有本子
@@ -255,17 +291,68 @@ class MistakeBooks {
     return pending.length;
   }
 
+  /// 删除一本错题本：连同副本里的配图一起删掉。
+  ///
+  /// 被删题目的 `origin` 会记进 `deleted_origins.json`，
+  /// 之后进入错题本时不会被自动收集回来；
+  /// 只影响 App 私有目录，原题库的题目和统计不变。
+  static Future<void> deleteBook(MistakeBookInfo book) async {
+    final File jsonFile = File(book.path);
+    final Directory dir = jsonFile.parent;
+
+    // 先读出题目：JSON 删掉后就拿不到配图文件名和 origin 了
+    final _BookData? data = await _readBook(jsonFile);
+    final Set<String> origins = <String>{};
+
+    if (data != null) {
+      for (final Map<String, dynamic> question in data.questions) {
+        final String origin = question['origin']?.toString() ?? '';
+        if (origin.isNotEmpty) origins.add(origin);
+
+        final String image = question['image']?.toString().trim() ?? '';
+        if (image.isEmpty) continue;
+
+        // 只取文件名，防止 JSON 里写路径把删除操作带到目录外
+        final String fileName = image.split(RegExp(r'[\\/]')).last;
+        final File target = File(
+          '${dir.path}${Platform.pathSeparator}$fileName',
+        );
+        try {
+          if (await target.exists()) await target.delete();
+        } catch (error) {
+          debugPrint('删除错题配图失败：$fileName $error');
+        }
+      }
+    }
+
+    if (await jsonFile.exists()) await jsonFile.delete();
+
+    if (origins.isNotEmpty) {
+      final Set<String> deleted = await _loadDeletedOrigins(dir);
+      deleted.addAll(origins);
+      await _saveDeletedOrigins(dir, deleted);
+    }
+  }
+
   // ---------------------------------------------------------------- 内部
 
   /// 目录下的 `.json` 文件，按本名顺序排序。
+  ///
+  /// 跳过用来记录「已删除来源」的清单文件，它不是错题本。
   static List<File> _jsonFiles(Directory dir) {
     final List<File> files = dir
         .listSync()
         .whereType<File>()
-        .where((File file) => file.path.toLowerCase().endsWith('.json'))
+        .where(
+          (File file) =>
+              file.path.toLowerCase().endsWith('.json') &&
+              _baseName(file).toLowerCase() != _deletedBaseName,
+        )
         .toList();
-    files.sort((File a, File b) =>
-        _orderOf(_baseName(a)).compareTo(_orderOf(_baseName(b))));
+    files.sort(
+      (File a, File b) =>
+          _orderOf(_baseName(a)).compareTo(_orderOf(_baseName(b))),
+    );
     return files;
   }
 
@@ -277,19 +364,47 @@ class MistakeBooks {
         : name;
   }
 
+  /// 读取「已删除来源」清单；文件不存在或损坏时返回空集合。
+  static Future<Set<String>> _loadDeletedOrigins(Directory dir) async {
+    final File file = File(
+      '${dir.path}${Platform.pathSeparator}$_deletedBaseName.json',
+    );
+    try {
+      if (!await file.exists()) return <String>{};
+      final dynamic decoded = jsonDecode(await file.readAsString());
+      if (decoded is! List) return <String>{};
+      return decoded.whereType<String>().toSet();
+    } catch (error) {
+      debugPrint('读取已删除错题记录失败：$error');
+      return <String>{};
+    }
+  }
+
+  /// 写入「已删除来源」清单，避免删掉的题下次自动收集时复活。
+  static Future<void> _saveDeletedOrigins(
+    Directory dir,
+    Set<String> origins,
+  ) async {
+    final File file = File(
+      '${dir.path}${Platform.pathSeparator}$_deletedBaseName.json',
+    );
+    final String content = const JsonEncoder.withIndent('  ')
+        .convert(<String>[...origins]);
+    await file.writeAsString(content, flush: true);
+  }
+
   static Future<_BookData?> _readBook(File file) async {
     try {
-      final String text =
-          BankIo.stripBom(await file.readAsString());
+      final String text = BankIo.stripBom(await file.readAsString());
       final dynamic decoded = jsonDecode(text);
       if (decoded is! Map) return null;
 
       final dynamic raw = decoded['questions'];
       final List<Map<String, dynamic>> questions = raw is List
           ? raw
-              .whereType<Map>()
-              .map((Map item) => Map<String, dynamic>.from(item))
-              .toList()
+                .whereType<Map>()
+                .map((Map item) => Map<String, dynamic>.from(item))
+                .toList()
           : <Map<String, dynamic>>[];
 
       return _BookData(name: _baseName(file), questions: questions);
@@ -301,8 +416,7 @@ class MistakeBooks {
 
   static Future<dynamic> _readBankJson(QuestionBankFile bankFile) async {
     try {
-      final String text =
-          BankIo.stripBom(await BankIo.readText(bankFile.uri));
+      final String text = BankIo.stripBom(await BankIo.readText(bankFile.uri));
       return jsonDecode(text);
     } catch (error) {
       debugPrint('读取题库失败：${bankFile.name} $error');
@@ -321,16 +435,17 @@ class MistakeBooks {
     if (image.isEmpty) return '';
 
     try {
-      final Uint8List? bytes =
-          await BankIo.readSiblingBytes(bankFile.directoryRef, image);
+      final Uint8List? bytes = await BankIo.readSiblingBytes(
+        bankFile.directoryRef,
+        image,
+      );
       if (bytes == null || bytes.isEmpty) return '';
 
       final int dot = image.lastIndexOf('.');
       final String extension = dot >= 0 ? image.substring(dot) : '.png';
       final String fileName = '$newId$extension';
 
-      final File target =
-          File('${dir.path}${Platform.pathSeparator}$fileName');
+      final File target = File('${dir.path}${Platform.pathSeparator}$fileName');
       await target.writeAsBytes(bytes, flush: true);
       return fileName;
     } catch (error) {
@@ -346,9 +461,8 @@ class MistakeBooks {
   ) async {
     final File file = File('${dir.path}${Platform.pathSeparator}$name.json');
     // 只写 questions：本子名由文件名承载，格式与普通题库保持一致
-    final String content = const JsonEncoder.withIndent('  ').convert(
-      <String, dynamic>{'questions': questions},
-    );
+    final String content = const JsonEncoder.withIndent('  ')
+        .convert(<String, dynamic>{'questions': questions});
     await file.writeAsString(content, flush: true);
   }
 }

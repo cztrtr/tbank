@@ -67,6 +67,46 @@ class _MistakeBooksPageState extends State<MistakeBooksPage> {
     if (mounted) await _load();
   }
 
+  /// 删除一本错题本：二次确认后连同配图一起删，再刷新列表。
+  ///
+  /// 被删的题会记入「已删除来源」清单，不会在刷新时被重新收集回来。
+  Future<void> _delete(MistakeBookInfo book) async {
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext dialogContext) => AlertDialog(
+        title: const Text('删除错题本'),
+        content: Text(
+          '将删除《${book.name}》及其 ${book.total} 道错题和配图。\n\n'
+          '原题库里的题目和统计不受影响，这些题之后也不会再自动收进错题本。',
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+
+    if (!mounted || confirmed != true) return;
+
+    try {
+      await MistakeBooks.deleteBook(book);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('已删除《${book.name}》')));
+      await _load();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('删除失败：$error')));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -95,10 +135,7 @@ class _MistakeBooksPageState extends State<MistakeBooksPage> {
                 style: TextStyle(color: colorScheme.error),
               ),
               const SizedBox(height: 12),
-              FilledButton(
-                onPressed: _load,
-                child: const Text('重试'),
-              ),
+              FilledButton(onPressed: _load, child: const Text('重试')),
             ],
           ),
         ),
@@ -147,31 +184,44 @@ class _MistakeBooksPageState extends State<MistakeBooksPage> {
         return ListTile(
           leading: Icon(
             finished ? Icons.check_circle : Icons.menu_book_outlined,
-            color: finished ? colorScheme.primary : colorScheme.onSurfaceVariant,
+            color: finished
+                ? colorScheme.primary
+                : colorScheme.onSurfaceVariant,
           ),
           title: Text(book.name),
           subtitle: Text('${book.total} 题'),
-          trailing: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.end,
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              Text(
-                finished ? '已完成' : '未完成',
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: finished
-                      ? colorScheme.primary
-                      : colorScheme.onSurfaceVariant,
-                ),
+              Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: <Widget>[
+                  Text(
+                    finished ? '已完成' : '未完成',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: finished
+                          ? colorScheme.primary
+                          : colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '${book.completed}/${book.total}',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(height: 2),
-              Text(
-                '${book.completed}/${book.total}',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: colorScheme.onSurfaceVariant,
-                ),
+              const SizedBox(width: 4),
+              IconButton(
+                tooltip: '删除错题本',
+                onPressed: () => _delete(book),
+                icon: Icon(Icons.delete_outline, color: colorScheme.error),
               ),
             ],
           ),

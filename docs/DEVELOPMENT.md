@@ -22,23 +22,24 @@
   - 语录文件的格式：一行一句，空行忽略，`#` 开头的行是注释
 - 题库管理
   - 右上角 `+` 调起系统目录选择器
-  - 扫描所选目录下的 `.json` 文件
+  - 扫描所选目录下的 `.json` 文件，按目录分组展示：文件夹名作为分组标题，题库缩进列在下面
   - 点击文件进入练习
-  - 每项右侧的删除按钮只移除 `config.json` 里的目录记录，不会删除目录或题目文件
+  - 文件夹标题右侧的删除按钮只移除 `config.json` 里的目录记录，不会删除目录或题目文件
 - 练习
   - 单选 `single_choice`
   - 多选 `multiple_choice`
   - 判断 `true_false`
-  - 填空/解释 `fill_blank`（配置了 DeepSeek 密钥时由 AI 判 0-10 分，低于 6 分判错；未配置时退回「展示答案 + 自判」）
+  - 填空/解释 `fill_blank`（可输入文字或拍照/选择作答图片；配置了 DeepSeek 密钥时由 AI 判 0-10 分，低于 6 分判错；未配置时退回「展示答案 + 自判」）
   - 选择题答完后左侧「AI 解析」、右侧「下一题」；AI 解析结果显示在页面最下方的独立框里
   - 题目上方显示该题累计「已作答 / 答错」次数
   - 题目配图：JSON 的 `image` 非空时，从**题库 JSON 所在目录**加载同名图片；选择题显示在选项下方，填空/解释题紧跟题干。文件缺失或无法解码时显示占位框并标出文件名
 - 错题本
   - 「我的 → 错题本」进入二级页面，打开时先扫描所有题库目录，把 `stats.wrongCount > 0` 的题复制到 App 私有目录的 `mistakes/`
-  - 每本 25 题，命名顺序：24 个希腊字母（Alpha…Omega）→ 十二地支（子…亥）→ 加序号再来一轮（Alpha 2、子 2……），共 36 个一轮
+  - 每本 25 题，命名顺序：24 个希腊字母（Alpha…Omega）→ 加序号再来一轮（Alpha 2、Beta 2……），共 24 个一轮；不再使用汉字命名
   - 题目 `id` 重编号为 `C001`…，并写入 `origin`（`<原文件引用>#<原题 id>`）用于去重、`mistakeScore`（初始 5）
   - 配图复制到 `mistakes/` 并按新编号重命名，错题本不依赖原题库目录
   - 作答时 `mistakeScore` 答对 -1、答错 +1，减到 0 视为完成；**题目保留不移除**，列表显示「已完成 / 未完成」
+  - 列表里可以删除整本（连同配图）；被删题目的 `origin` 写入 `mistakes/deleted_origins.json`，之后不再自动收集
   - 错题本内作答不回写原题库统计
 - 统计与持久化
   - 每题判分后更新内存统计，并写一次文档目录下的工作副本
@@ -343,7 +344,7 @@ API Key 从 `AppConfig.dsApiKey` 读取，未配置时抛 `DsApiException`。
 | 成员 | 说明 |
 | --- | --- |
 | `ask(content, stream:, thinking:)` | 通用问答；`thinking` 控制是否启用思考模式 |
-| `scoreAnswer(question:, standardAnswer:, userAnswer:, imageBytes:)` | 给主观题打 0-10 分，供填空/解释题判分 |
+| `scoreAnswer(question:, standardAnswer:, userAnswer:, imageBytes:, answerImages:)` | 给主观题打 0-10 分，供填空/解释题判分；`imageBytes` 是题目配图，`answerImages` 是学生上传的作答图片（可多张） |
 | `explainQuestion(question:, options:, correctAnswer:, imageBytes:)` | 生成选择题解析，供「AI 解析」按钮使用 |
 | `sseDelta(line)` | 解析一行 SSE，区分正文 `content` 与思考过程 `reasoning_content` |
 
@@ -365,8 +366,12 @@ API Key 从 `AppConfig.dsApiKey` 读取，未配置时抛 `DsApiException`。
 | `directory()` | 返回 `mistakes/` 目录，不存在则创建 |
 | `list()` | 列出所有本子及各自「已完成 / 总数」，按 Alpha、Beta…… 排序 |
 | `collectFromBanks()` | 扫描所有题库，把 `wrongCount > 0` 且未收集过的题复制进来，返回新增数 |
+| `deleteBook(book)` | 删除一本错题本及其配图，并把题目的 `origin` 记入删除清单 |
 
 去重键是 `origin = '<原题库文件引用>#<原题 id>'`；编号 `C001` 由已有本子里的最大编号递增得出。
+本子名从 Alpha…Omega 里取**当前未被占用**的第一个（[`_nextName`](lib/services/mistake_books.dart)），
+删除中间的某本后新建不会重名覆盖。被删除的 `origin` 存在 `mistakes/deleted_origins.json`，
+`collectFromBanks()` 会跳过它们，避免删完下次进入又自动收回来。
 
 ### 页面
 
@@ -579,7 +584,7 @@ kotlin.incremental=false
 - **同名文件冲突**：不同目录下的同名 `.json` 会映射到文档目录下同一个副本；
 - **强杀进程可能丢最后一次同步**：生命周期回调不保证执行，但工作副本通常是安全的；
 - **同一题库练完后再点一次不会自动重开**：`didUpdateWidget` 比较的是路径，路径没变不会重新加载；可以点完成页的“再练一遍”，或给选择加一个序号；
-- **填空/解释的判分依赖 DeepSeek**：配置了 Key 时由 AI 打 0-10 分（低于 6 分判错），未配置或请求失败时退回“答对了 / 答错了”自判；AI 判分有模型波动，同一答案分数可能不完全一致；
+- **填空/解释的判分依赖 DeepSeek**：配置了 Key 时由 AI 打 0-10 分（低于 6 分判错），未配置或请求失败时退回“答对了 / 答错了”自判；AI 判分有模型波动，同一答案分数可能不完全一致；作答图片最多 4 张、单张 5 MB、合计 10 MB，Android 端会压缩到长边 1600px；
 - **只扫描目录第一层**：需要递归时把 `dir.list(followLinks: false)` 改为 `recursive: true`；
 - **删除目录记录会带走该目录下所有题库**：列表按文件展示，但删除操作移除的是整个目录记录，同一目录里的其它 `.json` 也会一起从列表消失（文件本身不删）；
 - **界面状态都在页面 State 里**：没有引入 Provider/Riverpod，跨页面共享只通过 AppConfig 的 notifier；

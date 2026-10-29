@@ -120,9 +120,7 @@ class DsApiService {
         <String, dynamic>{'role': 'user', 'content': content},
       ],
       'stream': stream,
-      'thinking': <String, String>{
-        'type': thinking ? 'enabled' : 'disabled',
-      },
+      'thinking': <String, String>{'type': thinking ? 'enabled' : 'disabled'},
     };
 
     final Uri uri = Uri.parse('$_baseUrl/chat/completions');
@@ -141,6 +139,9 @@ class DsApiService {
 
   /// 让 AI 给主观题（填空 / 解释）打分，返回 0-10 的整数。
   ///
+  /// [imageBytes] 是题目配图；[answerImages] 是学生拍照上传的作答图片，
+  /// 可以有多张，会一并发给模型。
+  ///
   /// 提示词要求模型只输出一个整数；返回里若混了别的字符，
   /// 会提取第一个整数并夹到 0-10。
   static Future<int> scoreAnswer({
@@ -148,8 +149,10 @@ class DsApiService {
     required String standardAnswer,
     required String userAnswer,
     Uint8List? imageBytes,
+    List<Uint8List> answerImages = const <Uint8List>[],
   }) async {
-    final String prompt = '''
+    final String prompt =
+        '''
 你是医学考试阅卷助手。请判断学生作答与标准答案的契合程度，给出 0 到 10 的整数分数。
 
 评分标准：
@@ -159,18 +162,25 @@ class DsApiService {
 - 1-3：基本错误但沾边
 - 0：完全错误或未作答
 
-如果有附图，请结合图片内容判断学生作答是否正确。
+如果附带图片：
+- 标注为「题目配图」的图片用于理解题目；
+- 标注为「学生作答图片」的图片是学生的手写 / 拍照答案，
+  请先识别图片里的文字和图表，再结合标准答案判分。
 
 题目：$question
 标准答案：$standardAnswer
-学生作答：$userAnswer
+学生作答文字：${userAnswer.isEmpty ? '（没有文字答案，见学生作答图片）' : userAnswer}
 
 只输出一个整数（0-10），不要解释、不要标点。
 ''';
 
-    // 有配图时用“文本 + 图片”的内容块数组，否则发纯文本
+    // 有配图或作答图片时用“文本 + 图片”的内容块数组，否则发纯文本
     final String raw = await _send(
-      _withOptionalImage(prompt, imageBytes),
+      _withImages(
+        prompt,
+        questionImage: imageBytes,
+        answerImages: answerImages,
+      ),
       stream: false,
       thinking: false,
     );
@@ -187,7 +197,8 @@ class DsApiService {
     required String correctAnswer,
     Uint8List? imageBytes,
   }) async {
-    final String prompt = '''
+    final String prompt =
+        '''
 你是医学课程的答疑老师。请针对下面这道选择题给出解析。
 
 要求：
@@ -206,7 +217,7 @@ $options
 ''';
 
     final String text = await _send(
-      _withOptionalImage(prompt, imageBytes),
+      _withImages(prompt, questionImage: imageBytes),
       stream: false,
       thinking: false,
     );
@@ -218,19 +229,55 @@ $options
   }
 
   /// 把提示词和可选图片组装成请求的 content。
-  static Object _withOptionalImage(String prompt, Uint8List? imageBytes) {
-    if (imageBytes == null || imageBytes.isEmpty) return prompt;
+  ///
+  /// - [questionImage]：题干配图；
+  /// - [answerImages]：学生作答图片，可以多张。
+  ///
+  /// 两类图片都带一行文字标签，避免模型把「题目配图」和「学生答案」
+  /// 混在一起。没有任何图片时返回纯文本，保持普通请求的形态。
+  static Object _withImages(
+    String prompt, {
+    Uint8List? questionImage,
+    List<Uint8List> answerImages = const <Uint8List>[],
+  }) {
+    final List<Uint8List> answers = answerImages
+        .where((Uint8List bytes) => bytes.isNotEmpty)
+        .toList();
+    final bool hasQuestionImage =
+        questionImage != null && questionImage.isNotEmpty;
 
-    return <Map<String, dynamic>>[
+    if (!hasQuestionImage && answers.isEmpty) return prompt;
+
+    final List<Map<String, dynamic>> content = <Map<String, dynamic>>[
       <String, dynamic>{'type': 'text', 'text': prompt},
-      <String, dynamic>{
-        'type': 'image_url',
-        'image_url': <String, String>{
-          'url': 'data:${_imageMime(imageBytes)};base64,'
-              '${base64Encode(imageBytes)}',
-        },
-      },
     ];
+
+    if (hasQuestionImage) {
+      content.add(<String, dynamic>{'type': 'text', 'text': '题目配图：'});
+      content.add(_imageBlock(questionImage));
+    }
+
+    if (answers.isNotEmpty) {
+      content.add(<String, dynamic>{
+        'type': 'text',
+        'text': '学生作答图片（共 ${answers.length} 张）：',
+      });
+      for (final Uint8List bytes in answers) {
+        content.add(_imageBlock(bytes));
+      }
+    }
+
+    return content;
+  }
+
+  /// 把一张图片编码成 OpenAI 兼容的 `image_url` 内容块。
+  static Map<String, dynamic> _imageBlock(Uint8List bytes) {
+    return <String, dynamic>{
+      'type': 'image_url',
+      'image_url': <String, String>{
+        'url': 'data:${_imageMime(bytes)};base64,${base64Encode(bytes)}',
+      },
+    };
   }
 
   /// 按文件头判断图片 MIME；官方是按内容而非扩展名识别格式。
@@ -274,8 +321,7 @@ $options
           .post(uri, headers: headers, body: jsonEncode(payload))
           .timeout(_timeout);
 
-      final String body =
-          utf8.decode(response.bodyBytes, allowMalformed: true);
+      final String body = utf8.decode(response.bodyBytes, allowMalformed: true);
 
       if (response.statusCode != 200) {
         throw _httpError(response.statusCode, body);
@@ -321,8 +367,9 @@ $options
         ..headers.addAll(headers)
         ..body = jsonEncode(payload);
 
-      final http.StreamedResponse response =
-          await client.send(request).timeout(_timeout);
+      final http.StreamedResponse response = await client
+          .send(request)
+          .timeout(_timeout);
 
       if (response.statusCode != 200) {
         final String body = await response.stream.bytesToString();
@@ -331,9 +378,10 @@ $options
 
       final StringBuffer buffer = StringBuffer();
 
-      await for (final String line in response.stream
-          .transform(utf8.decoder)
-          .transform(const LineSplitter())) {
+      await for (final String line
+          in response.stream
+              .transform(utf8.decoder)
+              .transform(const LineSplitter())) {
         final String trimmed = line.trim();
         if (trimmed.isEmpty) continue;
 
@@ -400,10 +448,12 @@ $options
       final dynamic content = delta['content'];
       final dynamic reasoning = delta['reasoning_content'];
 
-      final String? text =
-          content is String && content.isNotEmpty ? content : null;
-      final String? thought =
-          reasoning is String && reasoning.isNotEmpty ? reasoning : null;
+      final String? text = content is String && content.isNotEmpty
+          ? content
+          : null;
+      final String? thought = reasoning is String && reasoning.isNotEmpty
+          ? reasoning
+          : null;
 
       if (text == null && thought == null) return null;
       return DsStreamDelta(content: text, reasoning: thought);
@@ -437,29 +487,53 @@ $options
 
     switch (statusCode) {
       case 400:
-        return DsApiException('请求参数有误（400）：$detail',
-            statusCode: statusCode, body: body);
+        return DsApiException(
+          '请求参数有误（400）：$detail',
+          statusCode: statusCode,
+          body: body,
+        );
       case 401:
-        return DsApiException('API Key 无效或已失效（401），请在设置里重新填写',
-            statusCode: statusCode, body: body);
+        return DsApiException(
+          'API Key 无效或已失效（401），请在设置里重新填写',
+          statusCode: statusCode,
+          body: body,
+        );
       case 402:
-        return DsApiException('账户余额不足（402），请到 DeepSeek 平台充值',
-            statusCode: statusCode, body: body);
+        return DsApiException(
+          '账户余额不足（402），请到 DeepSeek 平台充值',
+          statusCode: statusCode,
+          body: body,
+        );
       case 422:
-        return DsApiException('请求格式错误（422）：$detail',
-            statusCode: statusCode, body: body);
+        return DsApiException(
+          '请求格式错误（422）：$detail',
+          statusCode: statusCode,
+          body: body,
+        );
       case 429:
-        return DsApiException('请求过于频繁（429），请稍后再试',
-            statusCode: statusCode, body: body);
+        return DsApiException(
+          '请求过于频繁（429），请稍后再试',
+          statusCode: statusCode,
+          body: body,
+        );
       case 500:
-        return DsApiException('DeepSeek 服务异常（500），请稍后重试',
-            statusCode: statusCode, body: body);
+        return DsApiException(
+          'DeepSeek 服务异常（500），请稍后重试',
+          statusCode: statusCode,
+          body: body,
+        );
       case 503:
-        return DsApiException('DeepSeek 服务繁忙（503），请稍后重试',
-            statusCode: statusCode, body: body);
+        return DsApiException(
+          'DeepSeek 服务繁忙（503），请稍后重试',
+          statusCode: statusCode,
+          body: body,
+        );
       default:
-        return DsApiException('请求失败（$statusCode）：$detail',
-            statusCode: statusCode, body: body);
+        return DsApiException(
+          '请求失败（$statusCode）：$detail',
+          statusCode: statusCode,
+          body: body,
+        );
     }
   }
 

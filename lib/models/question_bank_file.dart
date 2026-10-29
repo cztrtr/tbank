@@ -26,4 +26,14 @@ class QuestionBankFile {
 
   /// 目录展示名；为空时由目录引用推导。
   final String? directoryName;
+
+  /// 界面展示名：去掉 `.json` 后缀（大小写不敏感）。
+  ///
+  /// 只影响 UI，真实文件名仍用 [name]，工作副本和回拷逻辑不变。
+  String get displayName {
+    if (name.length > 5 && name.toLowerCase().endsWith('.json')) {
+      return name.substring(0, name.length - 5);
+    }
+    return name;
+  }
 }

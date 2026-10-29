@@ -4,9 +4,10 @@
 // 3. 每题判分后更新内存统计并写回工作副本；
 // 4. 完成整份 / 进入后台 / 页面销毁时，把工作副本回拷到题库文件夹。
 import 'dart:async';
-import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../models/question_bank.dart';
 import '../models/question_bank_file.dart';
@@ -60,6 +61,13 @@ class _PracticePageState extends State<PracticePage>
   String? _aiAnalysisError; // AI 解析失败原因
   final TextEditingController _answerController =
       TextEditingController(); // 主观题的作答输入
+
+  /// 学生拍照 / 上传的作答图片；AI 判分时会和文字答案一起发送。
+  final List<Uint8List> _answerImages = <Uint8List>[];
+
+  static const int _maxAnswerImages = 4; // 一次作答最多几张图
+  static const int _maxAnswerImageBytes = 5 * 1024 * 1024; // 单张 5 MB 上限
+  static const int _maxTotalAnswerBytes = 10 * 1024 * 1024; // 合计 10 MB 上限
   bool _finished = false; // 整套题是否做完
   int _answeredCount = 0; // 本次练习一共答了多少题
   int _correctCount = 0; // 本次练习答对了多少题
@@ -159,6 +167,7 @@ class _PracticePageState extends State<PracticePage>
   void _resetQuestionState() {
     _selected.clear();
     _answerController.clear();
+    _answerImages.clear();
     _showAnswer = false;
     _answered = false;
     _wasCorrect = false;
@@ -207,10 +216,11 @@ class _PracticePageState extends State<PracticePage>
 
   /// 把主观题作答交给 AI 判分：得分 >= 6 判为答对。
   ///
+  /// 文字答案和拍照上传的作答图片至少有一项即可提交；
   /// 判分失败（网络、Key 失效等）时提示并退回自判，保证这题还能继续做。
   Future<void> _submitWithAi(Question question) async {
     final String answer = _answerController.text.trim();
-    if (answer.isEmpty || _grading) return;
+    if ((answer.isEmpty && _answerImages.isEmpty) || _grading) return;
 
     setState(() => _grading = true);
     try {
@@ -233,6 +243,7 @@ class _PracticePageState extends State<PracticePage>
         standardAnswer: question.correctAnswers.join('\n'),
         userAnswer: answer,
         imageBytes: imageBytes,
+        answerImages: _answerImages,
       );
       if (!mounted) return;
 
@@ -240,13 +251,126 @@ class _PracticePageState extends State<PracticePage>
       _recordAnswer(score >= 6);
     } on DsApiException catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('AI 判分失败：${error.message}')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('AI 判分失败：${error.message}')));
       setState(() => _aiFallback = true); // 本题退回自判
     } finally {
       if (mounted) setState(() => _grading = false);
     }
+  }
+
+  /// 选择作答图片：Android 支持拍照或相册，桌面端直接打开文件选择器。
+  Future<void> _pickAnswerImage() async {
+    if (_answerImages.length >= _maxAnswerImages) {
+      _toast('最多上传 $_maxAnswerImages 张作答图片');
+      return;
+    }
+
+    final bool isAndroid = defaultTargetPlatform == TargetPlatform.android;
+    final ImageSource? source = isAndroid
+        ? await showModalBottomSheet<ImageSource>(
+            context: context,
+            builder: (BuildContext sheetContext) => SafeArea(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  ListTile(
+                    leading: const Icon(Icons.photo_camera_outlined),
+                    title: const Text('拍照'),
+                    onTap: () =>
+                        Navigator.pop(sheetContext, ImageSource.camera),
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.photo_library_outlined),
+                    title: const Text('从相册选择'),
+                    onTap: () =>
+                        Navigator.pop(sheetContext, ImageSource.gallery),
+                  ),
+                ],
+              ),
+            ),
+          )
+        : ImageSource.gallery;
+
+    if (!mounted || source == null) return;
+
+    try {
+      final XFile? picked = await ImagePicker().pickImage(
+        source: source,
+        maxWidth: 1600, // 压缩到长边 1600，控制 base64 后的请求体积
+        imageQuality: 85,
+      );
+      if (picked == null) return;
+
+      final Uint8List bytes = await picked.readAsBytes();
+      if (!mounted || bytes.isEmpty) return;
+      if (bytes.length > _maxAnswerImageBytes) {
+        _toast('图片太大了（超过 5 MB），请换一张');
+        return;
+      }
+      final int totalBytes =
+          _answerImages.fold<int>(
+            0,
+            (int sum, Uint8List bytes) => sum + bytes.length,
+          ) +
+          bytes.length;
+      if (totalBytes > _maxTotalAnswerBytes) {
+        _toast('作答图片合计超过 10 MB，请删掉几张再试');
+        return;
+      }
+      setState(() => _answerImages.add(bytes));
+    } catch (error) {
+      if (!mounted) return;
+      _toast('选择图片失败：$error');
+    }
+  }
+
+  /// 已选作答图片的缩略图，右上角叉号可单张移除。
+  Widget _buildAnswerImages() {
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: <Widget>[
+        for (int i = 0; i < _answerImages.length; i++)
+          Stack(
+            children: <Widget>[
+              ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: Image.memory(
+                  _answerImages[i],
+                  width: 84,
+                  height: 84,
+                  fit: BoxFit.cover,
+                ),
+              ),
+              Positioned(
+                top: 0,
+                right: 0,
+                child: GestureDetector(
+                  onTap: () => setState(() => _answerImages.removeAt(i)),
+                  child: Container(
+                    padding: const EdgeInsets.all(2),
+                    decoration: const BoxDecoration(
+                      color: Colors.black54,
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.close,
+                      size: 15,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+      ],
+    );
+  }
+
+  void _toast(String message) {
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
   }
 
   /// 请求 AI 解析当前选择题：把题干、选项、正确答案（有图则带图）发给模型。
@@ -335,7 +459,8 @@ class _PracticePageState extends State<PracticePage>
     if (bank == null) return;
 
     final question = bank.questions[_index];
-    final correct = question.correctAnswers.length == _selected.length &&
+    final correct =
+        question.correctAnswers.length == _selected.length &&
         question.correctAnswers.every(_selected.contains);
 
     _recordAnswer(correct);
@@ -413,9 +538,9 @@ class _PracticePageState extends State<PracticePage>
   Widget build(BuildContext context) {
     final bank = widget.bank;
 
-    // 标题直接用题库文件名，方便确认当前练的是哪一份。
+    // 标题用题库展示名（去掉 .json），方便确认当前练的是哪一份。
     return Scaffold(
-      appBar: AppBar(title: Text(bank?.name ?? '练习')),
+      appBar: AppBar(title: Text(bank?.displayName ?? '练习')),
       body: _buildBody(bank),
     );
   }
@@ -505,25 +630,20 @@ class _PracticePageState extends State<PracticePage>
         const SizedBox(height: 18),
         Text(
           question.question,
-          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                height: 1.5,
-                fontWeight: FontWeight.w600,
-              ),
+          style: Theme.of(context).textTheme.titleMedium
+              ?.copyWith(height: 1.5, fontWeight: FontWeight.w600),
         ),
         const SizedBox(height: 20),
 
         // 填空/解释走“展示答案 + 自己判断”，其余题型走选项。
         // 配图位置按题型区分：选择题放在选项下方，填空/解释题紧跟题干。
-        if (question.isFillBlank)
-          ...<Widget>[
-            _buildQuestionImage(question),
-            ..._buildFillBlank(question),
-          ]
-        else
-          ...<Widget>[
-            ..._buildChoices(question),
-            _buildQuestionImage(question),
-          ],
+        if (question.isFillBlank) ...<Widget>[
+          _buildQuestionImage(question),
+          ..._buildFillBlank(question),
+        ] else ...<Widget>[
+          ..._buildChoices(question),
+          _buildQuestionImage(question),
+        ],
 
         if (_answered) ...<Widget>[
           // 已判分：左边「AI 解析」（仅选择题），右边「下一题」
@@ -638,11 +758,12 @@ class _PracticePageState extends State<PracticePage>
 
   /// 填空/解释作答区。
   ///
-  /// 配了 DeepSeek API Key 时用 AI 判分：多行输入框 + 提交，AI 给 0-10 分，
-  /// 低于 6 分判错；没配 Key 或本题判分失败时退回「展示答案 + 自判」。
+  /// 配了 DeepSeek API Key 时用 AI 判分：文字输入 + 可选的拍照/图片作答，
+  /// AI 给 0-10 分，低于 6 分判错；没配 Key 或本题判分失败时退回
+  /// 「展示答案 + 自判」。
   List<Widget> _buildFillBlank(Question question) {
-    final bool aiEnabled = !_aiFallback &&
-        (AppConfig.dsApiKey ?? '').trim().isNotEmpty;
+    final bool aiEnabled =
+        !_aiFallback && (AppConfig.dsApiKey ?? '').trim().isNotEmpty;
 
     if (!aiEnabled) {
       return _buildFillBlankManual(question);
@@ -654,7 +775,8 @@ class _PracticePageState extends State<PracticePage>
     }
 
     final bool canSubmit =
-        !_grading && _answerController.text.trim().isNotEmpty;
+        !_grading &&
+        (_answerController.text.trim().isNotEmpty || _answerImages.isNotEmpty);
 
     return <Widget>[
       TextField(
@@ -665,13 +787,40 @@ class _PracticePageState extends State<PracticePage>
         onChanged: (_) => setState(() {}), // 让提交按钮的可用状态跟随输入
         style: const TextStyle(fontSize: 15, height: 1.5),
         decoration: InputDecoration(
-          hintText: '在这里输入你的答案',
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
+          hintText: '在这里输入你的答案（也可以只上传图片）',
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+      ),
+
+      // 已选图片的缩略图；没有图片时不占空间
+      if (_answerImages.isNotEmpty) ...<Widget>[
+        const SizedBox(height: 12),
+        _buildAnswerImages(),
+      ],
+
+      const SizedBox(height: 10),
+      Align(
+        alignment: Alignment.centerLeft,
+        child: OutlinedButton.icon(
+          onPressed: _grading ? null : _pickAnswerImage,
+          icon: const Icon(Icons.add_a_photo_outlined, size: 18),
+          label: Text(
+            _answerImages.isEmpty
+                ? '拍照 / 上传作答图片'
+                : '继续添加图片（${_answerImages.length}/$_maxAnswerImages）',
           ),
         ),
       ),
+      const SizedBox(height: 2),
+      Text(
+        '拍照上传手写作答，AI 会结合图片内容判分，最多 $_maxAnswerImages 张',
+        style: TextStyle(
+          fontSize: 11,
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
+      ),
       const SizedBox(height: 12),
+
       // 左边「上一题」，右边「提交」（交给 AI 判分）
       Row(
         children: <Widget>[
@@ -715,8 +864,9 @@ class _PracticePageState extends State<PracticePage>
             const SizedBox(width: 12),
             Expanded(
               child: OutlinedButton(
-                onPressed:
-                    _answered ? null : () => setState(() => _showAnswer = true),
+                onPressed: _answered
+                    ? null
+                    : () => setState(() => _showAnswer = true),
                 child: const Text('展示答案'),
               ),
             ),
@@ -798,10 +948,7 @@ class _PracticePageState extends State<PracticePage>
           ),
           if (_aiScore != null) ...<Widget>[
             const SizedBox(height: 4),
-            Text(
-              'AI 评分：$_aiScore / 10',
-              style: TextStyle(color: foreground),
-            ),
+            Text('AI 评分：$_aiScore / 10', style: TextStyle(color: foreground)),
           ],
           // 错题本里的题额外显示「还差几次」的进度
           if (question.isFromMistakeBook) ...<Widget>[
@@ -867,7 +1014,9 @@ class _PracticePageState extends State<PracticePage>
   ///
   /// 三种状态共用一个外框：加载中、请求失败（可重试）、拿到解析文本。
   List<Widget> _buildAiAnalysis(Question question) {
-    if (!_aiAnalysisLoading && _aiAnalysis == null && _aiAnalysisError == null) {
+    if (!_aiAnalysisLoading &&
+        _aiAnalysis == null &&
+        _aiAnalysisError == null) {
       return const <Widget>[];
     }
 
@@ -981,9 +1130,8 @@ class _PracticePageState extends State<PracticePage>
             const SizedBox(height: 16),
             Text(
               '练习完成',
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
+              style: Theme.of(context).textTheme.titleLarge
+                  ?.copyWith(fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 10),
             Text(
