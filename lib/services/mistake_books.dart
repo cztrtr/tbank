@@ -7,10 +7,17 @@
 //     C001.png     // 错题自带配图，复制过来并按错题编号重命名
 //
 // 错题本里的每道题比普通题库多两个字段：
-//   origin       来源 `<原题库文件引用>#<原题目 id>`，用于去重
-//   mistakeScore 还需答对几次才算完成：收集时 5，答对 -1、答错 +1
+//   origin       来源，用于去重。收录时直接记「稳定题目 id」：
+//                首次扫描到题库时，App 会把每题的 id 替换成 `q_` 前缀的
+//                随机长字符串并写回原文件；origin 只记这个 id，
+//                与题库文件的位置无关 —— 文件挪位置、重新加载都不会
+//                导致重复收集或丢失记录。
+//                旧版本记录的 origin 是 `<文件引用>#<原题 id>`，
+//                收集时自动迁移成稳定 id。
+//   mistakeScore 还需答对几次才算完成：收集时 3，答对 -1、答错 +1
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
@@ -62,11 +69,45 @@ class MistakeBooks {
   /// 一本最多放几道题。
   static const int perBook = 25;
 
-  /// 刚收进错题本时「还需要答对几次」。
-  static const int initialScore = 5;
+  /// 刚收进错题本时「还需要答对几次」，答对 3 次即视为完成。
+  static const int initialScore = 3;
 
   /// 记录「已删除来源」的清单文件名（不含 `.json`）。
   static const String _deletedBaseName = 'deleted_origins';
+
+  /// 稳定题目 id 的前缀：带这个前缀的 id 是 App 生成的随机 id。
+  ///
+  /// 用前缀而不是长度/字符集来判断，是因为用户手写的 id 什么形态都可能有，
+  /// 前缀是唯一无歧义的标志；同一道题只会生成一次，之后原样保留。
+  static const String _stableIdPrefix = 'q_';
+
+  /// 稳定 id 的随机部分长度：26 位 [a-z0-9]，62^26 ≈ 5e46，
+  /// 任何两道题撞 id 的概率都可以忽略。
+  static const int _stableIdLength = 26;
+
+  /// 判定「已是稳定 id」所需的最小总长度，给手写 id 留出误判余量。
+  static const int _stableIdMinLength = 16;
+
+  /// 随机 id 的字符表：去掉大写字母，避免与用户手写的 `Q001` 这类
+  /// 大写开头的 id 视觉混淆；去重只看字符串相等，可读性不重要。
+  static const String _stableIdAlphabet =
+      'abcdefghijklmnopqrstuvwxyz0123456789';
+
+  /// 加密安全的随机数：id 只在生成时算一次，开销可以忽略。
+  static final Random _idRandom = Random.secure();
+
+  /// 判断一个 id 是否已经是 App 生成的稳定随机 id。
+  static bool _isStableId(String id) =>
+      id.startsWith(_stableIdPrefix) && id.length >= _stableIdMinLength;
+
+  /// 生成一个稳定题目 id：`q_` + 26 位随机小写字母数字。
+  static String _generateStableId() {
+    final StringBuffer buffer = StringBuffer(_stableIdPrefix);
+    for (int i = 0; i < _stableIdLength; i++) {
+      buffer.write(_stableIdAlphabet[_idRandom.nextInt(_stableIdAlphabet.length)]);
+    }
+    return buffer.toString();
+  }
 
   /// 本子命名顺序：24 个希腊字母（Alpha…Omega），一轮用完后加序号
   /// （Alpha 2、Beta 2……）。不再使用汉字命名。
@@ -171,7 +212,8 @@ class MistakeBooks {
 
   /// 扫描所有题库，把答错过的题收进错题本，返回本次新增的题目数。
   ///
-  /// 已经收集过的题（按 `origin` 判断）不会重复加入；
+  /// 收录前先把各题库里的题目 id 迁移成稳定随机 id（见 [_migrateQuestionIds]），
+  /// 之后按稳定 id 去重：文件挪位置、换设备都不会导致重复收集。
   /// 配图会一起复制过来，并按错题编号重命名。
   static Future<int> collectFromBanks() async {
     final Directory dir = await directory();
@@ -200,8 +242,12 @@ class MistakeBooks {
       }
     }
 
-    // 2. 遍历题库目录，挑出答错且没收集过的题
-    final List<Map<String, dynamic>> pending = <Map<String, dynamic>>[];
+    // 2. 遍历题库目录：
+    //    2a. 把每份题库里的题目 id 迁移成稳定随机 id 并回写原文件；
+    //    2b. 挑出答错过的题作为收录候选（此时先收集，后面统一判断收录）。
+    final List<_Candidate> candidates = <_Candidate>[];
+    // 旧 origin → 新 origin 的映射，用于迁移老错题本和删除清单里的记录
+    final Map<String, String> originMigrations = <String, String>{};
 
     for (final String dirRef in AppConfig.questionBankDirsNotifier.value) {
       List<QuestionBankFile> bankFiles;
@@ -222,6 +268,13 @@ class MistakeBooks {
         final dynamic rawQuestions = decoded['questions'];
         if (rawQuestions is! List) continue;
 
+        // 迁移这份题库的题目 id；失败（回写不了）时按未迁移处理
+        final bool migrated = await _migrateQuestionIds(
+          bankFile,
+          decoded,
+          originMigrations,
+        );
+
         for (final dynamic item in rawQuestions) {
           if (item is! Map) continue;
           final Map<String, dynamic> question = Map<String, dynamic>.from(item);
@@ -233,32 +286,90 @@ class MistakeBooks {
               : 0;
           if (wrongCount <= 0) continue;
 
-          final String origin = '${bankFile.uri}#${question['id']}';
-          // 用户主动删过的那本，不再自动收回来；否则删完下次进入又出现
-          if (deletedOrigins.contains(origin)) continue;
-          if (!knownOrigins.add(origin)) continue; // 已收集过
-
-          maxNumber++;
-          final String newId = 'C${maxNumber.toString().padLeft(3, '0')}';
-
-          question['id'] = newId;
-          question['origin'] = origin;
-          question['mistakeScore'] = initialScore;
-          question['image'] = await _copyImage(
-            dir,
-            bankFile,
-            question['image'],
-            newId,
+          final String id = question['id']?.toString() ?? '';
+          // 迁移成功的题库：id 已是稳定随机 id，origin 直接记它，
+          // 与文件位置彻底解耦 —— 挪目录、换设备都不影响去重；
+          // 迁移失败的题库：沿用旧格式 `<文件引用>#<id>`，行为不回退。
+          final String legacyOrigin = '${bankFile.uri}#$id';
+          candidates.add(
+            _Candidate(
+              question: question,
+              bankFile: bankFile,
+              origin: migrated ? id : legacyOrigin,
+              legacyOrigin: legacyOrigin,
+            ),
           );
-
-          pending.add(question);
         }
       }
     }
 
-    if (pending.isEmpty) return 0;
+    // 3. 把老错题本里的旧格式 origin 迁移成稳定 id。
+    //
+    //    不迁移的话，题目 id 已被替换成随机 id，旧记录 `文件引用#旧id`
+    //    对不上新数据，同一道题会被当成新错题重复收集。
+    bool booksChanged = false;
+    if (originMigrations.isNotEmpty) {
+      for (final _BookData book in books) {
+        for (final Map<String, dynamic> question in book.questions) {
+          final String origin = question['origin']?.toString() ?? '';
+          final String? migrated = originMigrations[origin];
+          if (migrated == null || migrated == origin) continue;
+          question['origin'] = migrated;
+          booksChanged = true;
+        }
+      }
 
-    // 3. 先填已有本子的空位，剩下的按每本 25 题新建
+      // 删除清单同样迁移：删过的题不能因为换了 id 就「复活」
+      final Set<String> migratedDeleted = <String>{
+        for (final String origin in deletedOrigins)
+          originMigrations[origin] ?? origin,
+      };
+      if (migratedDeleted.length != deletedOrigins.length ||
+          !migratedDeleted.containsAll(deletedOrigins)) {
+        deletedOrigins
+          ..clear()
+          ..addAll(migratedDeleted);
+        await _saveDeletedOrigins(dir, deletedOrigins);
+      }
+    }
+
+    // 4. 收录候选题：同一条 origin 只收一次，删过的题不再自动收回。
+    //
+    //    新旧双形态判断：稳定 id 和旧格式键任一命中都视为已收录，
+    //    兼容迁移失败、错题本文件损坏等没能完成迁移的情况。
+    final List<Map<String, dynamic>> pending = <Map<String, dynamic>>[];
+
+    for (final _Candidate candidate in candidates) {
+      if (deletedOrigins.contains(candidate.origin) ||
+          deletedOrigins.contains(candidate.legacyOrigin)) {
+        continue;
+      }
+      if (knownOrigins.contains(candidate.origin) ||
+          knownOrigins.contains(candidate.legacyOrigin)) {
+        continue;
+      }
+      knownOrigins.add(candidate.origin);
+
+      maxNumber++;
+      final String newId = 'C${maxNumber.toString().padLeft(3, '0')}';
+      final Map<String, dynamic> question = candidate.question;
+
+      question['id'] = newId;
+      question['origin'] = candidate.origin;
+      question['mistakeScore'] = initialScore;
+      question['image'] = await _copyImage(
+        dir,
+        candidate.bankFile,
+        question['image'],
+        newId,
+      );
+
+      pending.add(question);
+    }
+
+    if (pending.isEmpty && !booksChanged) return 0;
+
+    // 5. 先填已有本子的空位，剩下的按每本 25 题新建
     final List<Map<String, dynamic>> remaining = List<Map<String, dynamic>>.of(
       pending,
     );
@@ -284,11 +395,68 @@ class MistakeBooks {
       books.add(_BookData(name: name, questions: slice));
     }
 
-    // 4. 写回所有本子
+    // 6. 写回所有本子：有新错题、或 origin 完成了迁移，都需要落盘
     for (final _BookData book in books) {
       await _writeBook(dir, book.name, book.questions);
     }
     return pending.length;
+  }
+
+  /// 把一份题库 JSON 里所有旧式 id 替换成稳定随机 id，并回写原文件。
+  ///
+  /// - 文件里所有 id 都已是稳定 id 时直接返回 true（幂等，不写文件）；
+  /// - 有替换时整份回写，`questions` 之外的顶层字段原样保留；
+  /// - 回写失败时把内存里的 id 全部恢复成旧值并返回 false，
+  ///   调用方按「未迁移」处理：origin 沿用旧格式，保证不会重复收集。
+  ///
+  /// [decoded] 是整份题库的 JSON 对象，键类型放宽为 dynamic——
+  /// 从 jsonDecode 得到的 Map 就是这个形态，这里只读不删。
+  ///
+  /// [migrations] 输出旧 origin → 新 origin 的映射：
+  /// 键 `<文件引用>#<旧 id>`，值 `<新稳定 id>`，用于迁移老错题本记录。
+  static Future<bool> _migrateQuestionIds(
+    QuestionBankFile bankFile,
+    Map<dynamic, dynamic> decoded,
+    Map<String, String> migrations,
+  ) async {
+    final dynamic rawQuestions = decoded['questions'];
+    if (rawQuestions is! List) return true;
+
+    // 需要替换的题：保留原 item 引用，回写失败时能精确恢复旧 id
+    final List<(Map<dynamic, dynamic>, String, String)> replacements =
+        <(Map<dynamic, dynamic>, String, String)>[];
+
+    for (final dynamic item in rawQuestions) {
+      if (item is! Map) continue;
+      final String oldId = item['id']?.toString() ?? '';
+      if (_isStableId(oldId)) continue;
+
+      final String newId = _generateStableId();
+      item['id'] = newId;
+      replacements.add((item, oldId, newId));
+    }
+
+    if (replacements.isEmpty) return true;
+
+    try {
+      final String content = const JsonEncoder.withIndent(
+        '  ',
+      ).convert(decoded);
+      await BankIo.writeText(bankFile.uri, content);
+    } catch (error) {
+      debugPrint('迁移题目 id 失败（${bankFile.name}）：$error');
+      // 没写进文件就不能用新 id：恢复内存，让它走旧格式 origin
+      for (final (Map<dynamic, dynamic> item, String oldId, String _) in replacements) {
+        item['id'] = oldId;
+      }
+      return false;
+    }
+
+    for (final (Map<dynamic, dynamic> _, String oldId, String newId)
+        in replacements) {
+      migrations['${bankFile.uri}#$oldId'] = newId;
+    }
+    return true;
   }
 
   /// 删除一本错题本：连同副本里的配图一起删掉。
@@ -473,4 +641,29 @@ class _BookData {
 
   final String name;
   final List<Map<String, dynamic>> questions;
+}
+
+/// 收集流程里的一道候选题：题库里答错过、可能被收进错题本的题。
+class _Candidate {
+  _Candidate({
+    required this.question,
+    required this.bankFile,
+    required this.origin,
+    required this.legacyOrigin,
+  });
+
+  /// 题目 JSON 的浅拷贝；收录时会改写 id / origin / mistakeScore / image。
+  final Map<String, dynamic> question;
+
+  /// 题目所在的题库文件，收录时用它定位并复制配图。
+  final QuestionBankFile bankFile;
+
+  /// 收录后写进错题本的 origin 键：
+  /// - 已迁移题库：稳定随机题目 id（`q_` 开头），与文件位置无关；
+  /// - 未迁移题库（id 回写失败）：旧格式 `<文件引用>#<id>`。
+  final String origin;
+
+  /// 旧格式的去重键，用于兼容老版本错题本记录；
+  /// 未迁移题库里它与 [origin] 相同，重复判断无副作用。
+  final String legacyOrigin;
 }

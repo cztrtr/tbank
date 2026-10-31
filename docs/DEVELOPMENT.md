@@ -36,7 +36,7 @@
 - 错题本
   - 「我的 → 错题本」进入二级页面，打开时先扫描所有题库目录，把 `stats.wrongCount > 0` 的题复制到 App 私有目录的 `mistakes/`
   - 每本 25 题，命名顺序：24 个希腊字母（Alpha…Omega）→ 加序号再来一轮（Alpha 2、Beta 2……），共 24 个一轮；不再使用汉字命名
-  - 题目 `id` 重编号为 `C001`…，并写入 `origin`（`<原文件引用>#<原题 id>`）用于去重、`mistakeScore`（初始 5）
+  - 题目 `id` 重编号为 `C001`…，并写入 `origin`（App 生成的稳定随机题目 id，`q_` 前缀）用于去重、`mistakeScore`（初始 3）
   - 配图复制到 `mistakes/` 并按新编号重命名，错题本不依赖原题库目录
   - 作答时 `mistakeScore` 答对 -1、答错 +1，减到 0 视为完成；**题目保留不移除**，列表显示「已完成 / 未完成」
   - 列表里可以删除整本（连同配图）；被删题目的 `origin` 写入 `mistakes/deleted_origins.json`，之后不再自动收集
@@ -279,6 +279,9 @@ build/windows/x64/runner/Release/
 - 未知 `type` 会按 `fill_blank` 处理，避免一条脏数据导致整份题库打不开；
 - `image` 是**文件名**，不是路径；非空时图片必须和这道题所在的 JSON 放在同一个目录，一道题最多一张图；留空或省略表示无图；
 - `id` 建议唯一，重复不会报错但不利于排查；
+- **`id` 会被 App 替换成稳定随机 id**：进入错题本页扫描时，凡不是 `q_` 前缀的 id
+  都会替换成 `q_` + 26 位随机串并回写原文件（`_migrateQuestionIds`），
+  错题去重因此只认题目本身、不认文件位置；替换失败（无法写回）时该文件沿用旧 id；
 - 写回时会重新序列化整个文件，顶层除 `questions` 外的字段不会保留。
 
 ## 核心类与常用方法
@@ -362,13 +365,17 @@ API Key 从 `AppConfig.dsApiKey` 读取，未配置时抛 `DsApiException`。
 | 成员 | 说明 |
 | --- | --- |
 | `perBook` | 一本最多 25 题 |
-| `initialScore` | 收进错题本时的初始 `mistakeScore`（5） |
+| `initialScore` | 收进错题本时的初始 `mistakeScore`（3） |
 | `directory()` | 返回 `mistakes/` 目录，不存在则创建 |
 | `list()` | 列出所有本子及各自「已完成 / 总数」，按 Alpha、Beta…… 排序 |
 | `collectFromBanks()` | 扫描所有题库，把 `wrongCount > 0` 且未收集过的题复制进来，返回新增数 |
 | `deleteBook(book)` | 删除一本错题本及其配图，并把题目的 `origin` 记入删除清单 |
 
-去重键是 `origin = '<原题库文件引用>#<原题 id>'`；编号 `C001` 由已有本子里的最大编号递增得出。
+去重键是 `origin`：**收录时直接记题目 id**。题目 id 由 App 预先迁移成
+`q_` 前缀的稳定随机串（与文件位置无关），老版本记录的
+`'<原题库文件引用>#<原题 id>'` 会在收集时按 `旧键 → 新键` 映射自动迁移
+（原文件回写失败时新收录仍用旧格式，去重时新旧键都查，保证不重复收集）。
+编号 `C001` 由已有本子里的最大编号递增得出。
 本子名从 Alpha…Omega 里取**当前未被占用**的第一个（[`_nextName`](lib/services/mistake_books.dart)），
 删除中间的某本后新建不会重名覆盖。被删除的 `origin` 存在 `mistakes/deleted_origins.json`，
 `collectFromBanks()` 会跳过它们，避免删完下次进入又自动收回来。
