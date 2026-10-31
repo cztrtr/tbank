@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 
 import '../services/app_config.dart';
+import '../services/mistake_books.dart';
 
 /// 设置页。
 ///
-/// 目前只有「DeepSeek 密钥」一项：输入并保存后经 base64 编码写入 config.json。
+/// 包含两项：
+/// - 「DeepSeek 密钥」：输入并保存后经 base64 编码写入 config.json；
+/// - 「重置错题本」：手动触发，删除所有已有错题本（连同配图）和删除记录。
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
 
@@ -15,6 +18,7 @@ class SettingsPage extends StatefulWidget {
 class _SettingsPageState extends State<SettingsPage> {
   final TextEditingController _keyController = TextEditingController(); // 密钥输入框
   bool _saving = false; // 是否正在保存，防止重复提交
+  bool _resetting = false; // 是否正在重置错题本
 
   @override
   void dispose() {
@@ -49,6 +53,52 @@ class _SettingsPageState extends State<SettingsPage> {
       );
     } finally {
       if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  /// 重置错题本：二次确认后删除所有已有错题本（连同配图）并清空删除记录。
+  ///
+  /// 只影响 App 私有目录，原题库的题目和统计不受影响；
+  /// 之后进入错题本页时，答错过的题会重新被收集。
+  Future<void> _resetMistakeBooks() async {
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext dialogContext) => AlertDialog(
+        title: const Text('重置错题本'),
+        content: const Text(
+          '将删除所有已有错题本（连同配图）和「已删除来源」记录。\n\n'
+          '原题库的题目和统计不受影响，之后答错的题会重新被收集。\n\n'
+          '此操作不可撤销。',
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('重置'),
+          ),
+        ],
+      ),
+    );
+
+    if (!mounted || confirmed != true) return;
+
+    setState(() => _resetting = true);
+    try {
+      final bool ok = await MistakeBooks.resetAll();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(ok ? '错题本已重置' : '部分文件删除失败，请重试')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('重置错题本失败：$error')),
+      );
+    } finally {
+      if (mounted) setState(() => _resetting = false);
     }
   }
 
@@ -128,6 +178,50 @@ class _SettingsPageState extends State<SettingsPage> {
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : const Text('保存'),
+            ),
+          ),
+
+          const SizedBox(height: 28),
+          const Divider(),
+          const SizedBox(height: 16),
+
+          // ---- 第二项：重置错题本 ----
+          Text(
+            '错题本',
+            style: textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '删除所有已有错题本（连同配图）和「已删除来源」记录。'
+            '原题库的题目和统计不受影响，之后答错的题会重新被收集。',
+            style: TextStyle(
+              fontSize: 12,
+              height: 1.5,
+              color: colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 10),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: _resetting ? null : _resetMistakeBooks,
+              icon: _resetting
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.delete_sweep_outlined, size: 18),
+              label: Text(_resetting ? '正在重置…' : '重置错题本'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: colorScheme.error,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
+              ),
             ),
           ),
         ],

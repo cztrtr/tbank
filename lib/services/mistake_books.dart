@@ -307,31 +307,12 @@ class MistakeBooks {
     //
     //    不迁移的话，题目 id 已被替换成随机 id，旧记录 `文件引用#旧id`
     //    对不上新数据，同一道题会被当成新错题重复收集。
-    bool booksChanged = false;
-    if (originMigrations.isNotEmpty) {
-      for (final _BookData book in books) {
-        for (final Map<String, dynamic> question in book.questions) {
-          final String origin = question['origin']?.toString() ?? '';
-          final String? migrated = originMigrations[origin];
-          if (migrated == null || migrated == origin) continue;
-          question['origin'] = migrated;
-          booksChanged = true;
-        }
-      }
-
-      // 删除清单同样迁移：删过的题不能因为换了 id 就「复活」
-      final Set<String> migratedDeleted = <String>{
-        for (final String origin in deletedOrigins)
-          originMigrations[origin] ?? origin,
-      };
-      if (migratedDeleted.length != deletedOrigins.length ||
-          !migratedDeleted.containsAll(deletedOrigins)) {
-        deletedOrigins
-          ..clear()
-          ..addAll(migratedDeleted);
-        await _saveDeletedOrigins(dir, deletedOrigins);
-      }
-    }
+    final bool booksChanged = await _applyOriginMigrations(
+      dir,
+      books,
+      deletedOrigins,
+      originMigrations,
+    );
 
     // 4. 收录候选题：同一条 origin 只收一次，删过的题不再自动收回。
     //
@@ -457,6 +438,174 @@ class MistakeBooks {
       migrations['${bankFile.uri}#$oldId'] = newId;
     }
     return true;
+  }
+
+  /// 把 [migrations]（旧 origin → 新 origin）应用到所有错题本与删除清单。
+  ///
+  /// 只改写能对上的记录：对不上的说明对应的原题库已不存在，
+  /// 保留旧键无害（那道题也不会再被扫描到）。
+  /// 删除清单有变化时立即写回；错题本只改内存，由调用方决定何时落盘。
+  ///
+  /// 返回错题本是否有改动（需要写回）。
+  static Future<bool> _applyOriginMigrations(
+    Directory dir,
+    List<_BookData> books,
+    Set<String> deletedOrigins,
+    Map<String, String> migrations,
+  ) async {
+    if (migrations.isEmpty) return false;
+
+    bool booksChanged = false;
+    for (final _BookData book in books) {
+      for (final Map<String, dynamic> question in book.questions) {
+        final String origin = question['origin']?.toString() ?? '';
+        final String? migrated = migrations[origin];
+        if (migrated == null || migrated == origin) continue;
+        question['origin'] = migrated;
+        booksChanged = true;
+      }
+    }
+
+    // 删除清单同样迁移：删过的题不能因为换了 id 就「复活」
+    final Set<String> migratedDeleted = <String>{
+      for (final String origin in deletedOrigins)
+        migrations[origin] ?? origin,
+    };
+    if (migratedDeleted.length != deletedOrigins.length ||
+        !migratedDeleted.containsAll(deletedOrigins)) {
+      deletedOrigins
+        ..clear()
+        ..addAll(migratedDeleted);
+      await _saveDeletedOrigins(dir, deletedOrigins);
+    }
+    return booksChanged;
+  }
+
+  /// 对指定目录下的所有题库做一次 id 迁移（添加题库目录时调用）。
+  ///
+  /// 与 [collectFromBanks] 里的迁移共用同一套逻辑：
+  /// 只替换非稳定 id，并把「旧 origin → 新 origin」的映射同步到
+  /// 已有错题本和删除清单，保证之后收集错题时去重键一致。
+  ///
+  /// 幂等：已是稳定 id 的题库不会重写文件。
+  /// 失败（目录读不到、文件写不回）只记日志，不影响添加目录本身。
+  static Future<void> migrateBankIdsInDirectory(String directoryRef) async {
+    try {
+      final Map<String, String> migrations = <String, String>{};
+
+      List<QuestionBankFile> bankFiles;
+      try {
+        bankFiles = await BankIo.listJsonFiles(
+          directoryRef,
+          directoryName: BankIo.displayNameOf(directoryRef),
+        );
+      } catch (error) {
+        debugPrint('添加目录后扫描题库失败：$directoryRef $error');
+        return;
+      }
+
+      for (final QuestionBankFile bankFile in bankFiles) {
+        final dynamic decoded = await _readBankJson(bankFile);
+        if (decoded is! Map) continue;
+        await _migrateQuestionIds(bankFile, decoded, migrations);
+      }
+      if (migrations.isEmpty) return;
+
+      // 迁移映射同样要落到错题本与删除清单，避免之后重复收集
+      final Directory dir = await directory();
+      final List<_BookData> books = <_BookData>[];
+      for (final File file in _jsonFiles(dir)) {
+        final _BookData? book = await _readBook(file);
+        if (book != null) books.add(book);
+      }
+      final Set<String> deletedOrigins = await _loadDeletedOrigins(dir);
+      final bool booksChanged = await _applyOriginMigrations(
+        dir,
+        books,
+        deletedOrigins,
+        migrations,
+      );
+      if (booksChanged) {
+        for (final _BookData book in books) {
+          await _writeBook(dir, book.name, book.questions);
+        }
+      }
+    } catch (error) {
+      debugPrint('添加目录后迁移题目 id 失败：$directoryRef $error');
+    }
+  }
+
+  /// 启动时自动迁移所有已添加目录下的题库 id（幂等）。
+  ///
+  /// 只处理 `config.json` 里已添加的目录；已是稳定 id 的文件不重写，
+  /// 因此第二次启动只会读一遍文件、几乎不产生写入。
+  /// 单个目录失败不影响其它目录（[migrateBankIdsInDirectory] 内部吞异常）。
+  static Future<void> migrateAllBankIds() async {
+    final List<String> dirs = List<String>.of(
+      AppConfig.questionBankDirsNotifier.value,
+    );
+    for (final String dirRef in dirs) {
+      await migrateBankIdsInDirectory(dirRef);
+    }
+  }
+
+  /// 重置错题本：删除所有已有错题本（连同配图）并清空删除史。
+  ///
+  /// 由设置页「重置错题本」按钮手动触发；只影响 App 私有目录，
+  /// 原题库的题目和统计不受影响，之后答错的题会重新被收集。
+  ///
+  /// 单个文件删除失败不会中断整体流程，只记日志；
+  /// 全部成功后返回 true（列表刷新由调用方负责）。
+  static Future<bool> resetAll() async {
+    final Directory dir = await directory();
+    bool ok = true;
+
+    // 1. 删除所有错题本 JSON（_jsonFiles 已排除 deleted_origins.json）
+    for (final File file in _jsonFiles(dir)) {
+      try {
+        await file.delete();
+      } catch (error) {
+        ok = false;
+        debugPrint('删除错题本失败：${file.path} $error');
+      }
+    }
+
+    // 2. 删除配图：先收集再删，避免遍历目录时边删边读
+    const Set<String> imageExtensions = <String>{
+      '.png',
+      '.jpg',
+      '.jpeg',
+      '.webp',
+      '.gif',
+    };
+    final List<File> images = <File>[];
+    await for (final FileSystemEntity entity in dir.list()) {
+      if (entity is! File) continue;
+      final String lower = entity.path.toLowerCase();
+      if (!imageExtensions.any(lower.endsWith)) continue;
+      images.add(entity);
+    }
+    for (final File image in images) {
+      try {
+        await image.delete();
+      } catch (error) {
+        ok = false;
+        debugPrint('删除错题配图失败：${image.path} $error');
+      }
+    }
+
+    // 3. 清空「已删除来源」清单：之前删过的题之后也能重新被收集
+    final File deletedFile = File(
+      '${dir.path}${Platform.pathSeparator}$_deletedBaseName.json',
+    );
+    try {
+      if (await deletedFile.exists()) await deletedFile.delete();
+    } catch (error) {
+      ok = false;
+      debugPrint('清空错题本删除史失败：$error');
+    }
+
+    return ok;
   }
 
   /// 删除一本错题本：连同副本里的配图一起删掉。

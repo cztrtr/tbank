@@ -279,7 +279,7 @@ build/windows/x64/runner/Release/
 - 未知 `type` 会按 `fill_blank` 处理，避免一条脏数据导致整份题库打不开；
 - `image` 是**文件名**，不是路径；非空时图片必须和这道题所在的 JSON 放在同一个目录，一道题最多一张图；留空或省略表示无图；
 - `id` 建议唯一，重复不会报错但不利于排查；
-- **`id` 会被 App 替换成稳定随机 id**：进入错题本页扫描时，凡不是 `q_` 前缀的 id
+- **`id` 会被 App 替换成稳定随机 id**：添加题库目录时（以及进入错题本页兜底）扫描时，凡不是 `q_` 前缀的 id
   都会替换成 `q_` + 26 位随机串并回写原文件（`_migrateQuestionIds`），
   错题去重因此只认题目本身、不认文件位置；替换失败（无法写回）时该文件沿用旧 id；
 - 写回时会重新序列化整个文件，顶层除 `questions` 外的字段不会保留。
@@ -369,6 +369,9 @@ API Key 从 `AppConfig.dsApiKey` 读取，未配置时抛 `DsApiException`。
 | `directory()` | 返回 `mistakes/` 目录，不存在则创建 |
 | `list()` | 列出所有本子及各自「已完成 / 总数」，按 Alpha、Beta…… 排序 |
 | `collectFromBanks()` | 扫描所有题库，把 `wrongCount > 0` 且未收集过的题复制进来，返回新增数 |
+| `migrateAllBankIds()` | 启动时迁移所有已添加目录下的题库 id（幂等；只读判断，已迁移的不重写） |
+| `migrateBankIdsInDirectory(dir)` | 添加题库目录时立即迁移该目录下所有题库的题目 id（幂等） |
+| `resetAll()` | 设置页「重置错题本」按钮调用的手动重置：删除所有错题本（JSON + 配图）并清空删除史 |
 | `deleteBook(book)` | 删除一本错题本及其配图，并把题目的 `origin` 记入删除清单 |
 
 去重键是 `origin`：**收录时直接记题目 id**。题目 id 由 App 预先迁移成
@@ -376,6 +379,15 @@ API Key 从 `AppConfig.dsApiKey` 读取，未配置时抛 `DsApiException`。
 `'<原题库文件引用>#<原题 id>'` 会在收集时按 `旧键 → 新键` 映射自动迁移
 （原文件回写失败时新收录仍用旧格式，去重时新旧键都查，保证不重复收集）。
 编号 `C001` 由已有本子里的最大编号递增得出。
+
+迁移时机：App 启动时（[`migrateAllBankIds`](lib/services/mistake_books.dart)）、
+添加题库目录时（[`migrateBankIdsInDirectory`](lib/services/mistake_books.dart)）与
+进入错题本页（`collectFromBanks`）各做一次，均幂等。
+启动时只读一遍文件判断，已迁移的题库不会重写，因此后续启动开销很小。
+错题本重置由设置页「重置错题本」按钮手动触发
+（[`resetAll`](lib/services/mistake_books.dart)）：删除 `mistakes/` 下所有
+错题本 JSON 与配图，并删除 `mistakes/deleted_origins.json`；
+不做自动执行，也不写任何标记，点一次执行一次。
 本子名从 Alpha…Omega 里取**当前未被占用**的第一个（[`_nextName`](lib/services/mistake_books.dart)），
 删除中间的某本后新建不会重名覆盖。被删除的 `origin` 存在 `mistakes/deleted_origins.json`，
 `collectFromBanks()` 会跳过它们，避免删完下次进入又自动收回来。

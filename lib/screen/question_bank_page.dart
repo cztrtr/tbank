@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../models/question_bank_file.dart'; // 公共的题库文件模型
 import '../services/app_config.dart'; // 题库目录的全局列表
 import '../services/bank_io.dart'; // 统一的目录/文件访问入口
+import '../services/mistake_books.dart'; // 添加目录时提前迁移题目 id
 import '../services/saf.dart'; // Android 的 SAF 目录选择
 
 /// 题库管理页：
@@ -142,6 +143,10 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
 
       // 写入 config.json，并触发全局 notifier；上面的监听会自动重新扫描
       await AppConfig.addQuestionBankDir(dirRef);
+
+      // 添加时立即把该目录下题库的题目 id 迁移成稳定随机 id，
+      // 让错题去重与文件位置彻底解耦；内部吞掉异常，失败不影响添加结果
+      await MistakeBooks.migrateBankIdsInDirectory(dirRef);
       if (!mounted) return;
 
       ScaffoldMessenger.of(context)
