@@ -26,8 +26,10 @@ class BankIo {
     String? directoryName,
   }) async {
     if (_isSafRef(directoryRef)) {
-      final List<SafEntry> entries =
-          await Saf.listChildren(directoryRef, extension: '.json');
+      final List<SafEntry> entries = await Saf.listChildren(
+        directoryRef,
+        extension: '.json',
+      );
 
       final List<QuestionBankFile> files = entries
           .map(
@@ -95,6 +97,24 @@ class BankIo {
     await File(fileRef).writeAsString(text, flush: true);
   }
 
+  /// 在题库目录里写入（或覆盖）一个同名 JSON 文件。
+  ///
+  /// 与 [writeText] 的区别：这里只在“目录 + 文件名”层面写，不经过已有的
+  /// document URI，因此可以创建新文件（AI 变式题会用到）。
+  static Future<void> writeSiblingText(
+    String directoryRef,
+    String fileName,
+    String text,
+  ) async {
+    if (_isSafRef(directoryRef)) {
+      await Saf.writeChildText(directoryRef, fileName, text);
+      return;
+    }
+
+    final File file = File('$directoryRef${Platform.pathSeparator}$fileName');
+    await file.writeAsString(text, flush: true);
+  }
+
   /// 在题库目录里按文件名读取配图字节；找不到返回 null。
   static Future<Uint8List?> readSiblingBytes(
     String directoryRef,
@@ -130,8 +150,10 @@ class BankIo {
       if (colon >= 0 && colon < decoded.length - 1) {
         return decoded.substring(colon + 1);
       }
-      final List<String> segments =
-          decoded.split('/').where((String s) => s.isNotEmpty).toList();
+      final List<String> segments = decoded
+          .split('/')
+          .where((String s) => s.isNotEmpty)
+          .toList();
       return segments.isEmpty ? decoded : segments.last;
     }
 

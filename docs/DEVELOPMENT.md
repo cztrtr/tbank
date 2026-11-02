@@ -35,12 +35,42 @@
   - 题目配图：JSON 的 `image` 非空时，从**题库 JSON 所在目录**加载同名图片；选择题显示在选项下方，填空/解释题紧跟题干。文件缺失或无法解码时显示占位框并标出文件名
 - 错题本
   - 「我的 → 错题本」进入二级页面，打开时先扫描所有题库目录，把 `stats.wrongCount > 0` 的题复制到 App 私有目录的 `mistakes/`
-  - 每本 25 题，命名顺序：24 个希腊字母（Alpha…Omega）→ 加序号再来一轮（Alpha 2、Beta 2……），共 24 个一轮；不再使用汉字命名
-  - 题目 `id` 重编号为 `C001`…，并写入 `origin`（App 生成的稳定随机题目 id，`q_` 前缀）用于去重、`mistakeScore`（初始 3）
-  - 配图复制到 `mistakes/` 并按新编号重命名，错题本不依赖原题库目录
+  - **按题库文件夹分组**：同一 App 添加目录下的错题收进 `mistakes/<文件夹名>/`（如 `mistakes/组织学/`），不同文件夹互不混合；老版本直接放在根目录的本子显示为「未分组」
+  - 每组 25 题一本，命名顺序：24 个希腊字母（Alpha…Omega）→ 加序号再来一轮（Alpha 2、Beta 2……），共 24 个一轮；不再使用汉字命名
+  - 题目 `id` 重编号为 `C001`…（组内独立编号），并写入 `origin`（App 生成的稳定随机题目 id，`q_` 前缀）用于去重、`mistakeScore`（初始 3）
+  - 配图复制到本子所在分组目录并按新编号重命名，错题本不依赖原题库目录
   - 作答时 `mistakeScore` 答对 -1、答错 +1，减到 0 视为完成；**题目保留不移除**，列表显示「已完成 / 未完成」
   - 列表里可以删除整本（连同配图）；被删题目的 `origin` 写入 `mistakes/deleted_origins.json`，之后不再自动收集
   - 错题本内作答不回写原题库统计
+- 快速开始
+  - 入口在「我的」页顶部，页面读取随包发布的 `assets/texts/quick_start.md` 展示
+  - 内容只覆盖上手步骤（打卡/添加题目/作答/错题本/配置 DeepSeek API/AI 出题），不写技术细节
+  - 渲染器只支持用到的少量 Markdown：标题、无序列表、`**粗体**`、`` `行内代码` ``
+- AI 出题
+  - 入口在「我的 → AI 出题」，需要已配置 DeepSeek 密钥
+  - 输入主题（作为文件夹名）与出题要求，勾选题型（单选/多选/判断/填空/名词解释/解答/证明），选择题目数量（5~100）
+  - 填空、名词解释、解答、证明在数据层统一为 `fill_blank`（options 为空数组，correctAnswer 是参考答案文本）
+  - 按「每本最多 25 道」分批生成保存到 App 私有目录：`Question/<主题>/<主题>-<时间戳>-<批次>.json`，格式与普通题库一致
+  - 题目经过校验（题型合法、选择题选项 ≥2、答案 key 在选项内、主观题有答案文本），不合法题跳过；id 全局连续重编 Q001…
+  - 页面下方列出已生成题库（按主题分组），点开直接练习；答错的题同样进错题本
+  - `Question/` 下的题库同时显示在「管理」页（QuestionBankPage 会额外扫描该内置目录）
+- AI 变式出题
+  - 入口在「管理」页每个题库右侧的 ✨ 按钮，针对用户已有的 `.json` 题库
+  - 读取题干/选项/答案/解析后，先调 AI 归纳**具体知识点**（`{"knowledgePoints":[...]}`），
+    再按知识点分批重新出题（换情景/换数据/换问法，不照抄原题）
+  - 新题保存回**原题库所在目录**，文件名按希腊字母递增：
+    `<原名>-alpha.json` → `<原名>-beta.json` → …（24 个字母用完后接序号 `-alpha-2`）；
+    自动跳过已占用的名字，不覆盖已有题库
+  - 默认题数与原题库一致（上限 100），题型默认沿用原题库出现过的题型；
+    可选完整题型：单选 / 多选 / 判断 / 填空 / 名词解释 / 解答 / 证明，
+    后四种在数据层统一为 `fill_blank`
+  - 新题 id 从 `Q001` 重编、stats 归零、`image` 置空；格式与普通题库完全一致
+  - 归纳知识点时最多均匀采样 60 道原题，避免提示词过长
+- 应用更新
+  - 入口在「设置」页：填 cpolar 地址 → 下载 `app-release.apk` → 拉起系统安装器
+  - 地址支持完整 APK 链接、只填域名（自动补 `/app-release.apk`）、不带协议（自动补 https）
+  - Android 下载到缓存目录后，通过 FileProvider 交给系统安装器；桌面端只下载到下载目录
+  - 未授予「安装未知应用」时会跳到系统授权页并提示用户重试
 - 统计与持久化
   - 每题判分后更新内存统计，并写一次文档目录下的工作副本
   - 整份做完、App 进入后台、页面销毁时，把工作副本回拷到题库所在文件夹
@@ -82,7 +112,10 @@ lib/
 │   ├── question_bank_storage.dart  # 读取/保存/回拷题库文件
 │   ├── bank_io.dart                # 存储访问统一入口（SAF / 文件路径）
 │   ├── saf.dart                    # Android SAF 通道封装
-│   ├── ds_api_service.dart         # DeepSeek API 调用
+│   ├── ds_api_service.dart         # DeepSeek API 调用（判分/解析/出题）
+│   ├── ai_question_generator.dart  # AI 出题：生成、校验、落盘到 Question/
+│   ├── variant_question_generator.dart # AI 变式出题：读题库→归纳知识点→按希腊字母命名写回同目录
+│   ├── update_service.dart         # 应用更新：下载 APK + 调起系统安装器
 │   └── mistake_books.dart          # 错题本收集、分本、计数
 ├── screen/
 │   ├── main_screen.dart            # 底部导航 + IndexedStack
@@ -90,11 +123,15 @@ lib/
 │   ├── question_bank_page.dart     # 目录选择、扫描、题库列表
 │   ├── practice_page.dart          # 练习界面与答题逻辑
 │   ├── mistake_books_page.dart     # 错题本二级页面
-│   ├── me_page.dart                # 个人中心，提供设置入口
+│   ├── ai_generate_page.dart       # AI 出题页（表单 + 已生成题库列表）
+│   ├── variant_generate_page.dart    # AI 变式出题页（知识点归纳 + 分批进度）
+│   ├── me_page.dart                # 个人中心，提供快速开始/错题本/AI 出题/设置入口
+│   ├── quick_start_page.dart        # 快速开始：读取 assets/texts/quick_start.md 展示
 │   └── settings_page.dart          # 设置页
 └── widgets/
     ├── quote_card.dart             # 首页语录卡：随机一句、点击换句
-    └── question_image.dart         # 题目配图：加载 + 缺失/损坏占位
+    ├── question_image.dart         # 题目配图：加载 + 缺失/损坏占位
+    └── math_text.dart              # LaTeX 公式混合文本渲染（题干/选项/解析）
 ```
 
 ## 快速开始
@@ -324,6 +361,7 @@ Android Storage Access Framework 的 Dart 封装，对应原生 `tbank/saf` 通�
 | `Saf.listChildren(uri, extension:)` | 列出目录下的一级文件 |
 | `Saf.readText(uri)` / `Saf.writeText(uri, text)` | 读写 UTF-8 文本，写入用 `wt` 模式会截断旧内容 |
 | `Saf.readChildBytes(dirUri, name)` | 按文件名读子文件字节，题目配图用 |
+| `Saf.writeChildText(dirUri, name, text)` | 在目录里新建/覆盖一个 JSON 文本文件（同名覆盖，否则 `createDocument` 新建），返回文档 URI；AI 变式题用 |
 | `Saf.releasePermission(uri)` | 释放目录授权 |
 
 ### BankIo（`lib/services/bank_io.dart`）
@@ -336,6 +374,7 @@ Android Storage Access Framework 的 Dart 封装，对应原生 `tbank/saf` 通�
 | `listJsonFiles(dirRef)` | 列出目录下的 `.json`，两种存储都支持 |
 | `readText(fileRef)` / `writeText(fileRef, text)` | 读写题库 JSON，读取时自动去掉 BOM |
 | `readSiblingBytes(dirRef, name)` | 读同级文件字节（题目配图） |
+| `writeSiblingText(dirRef, name, text)` | 在目录里新建/覆盖 JSON 文件（SAF 走原生 `createDocument`，桌面直接写路径） |
 | `releaseDirectory(dirRef)` | 释放 SAF 授权；桌面端空操作 |
 | `displayNameOf(dirRef)` | 从引用推导展示名，例如 `content://…/tree/primary%3ABooks` → `Books` |
 
@@ -349,6 +388,9 @@ API Key 从 `AppConfig.dsApiKey` 读取，未配置时抛 `DsApiException`。
 | `ask(content, stream:, thinking:)` | 通用问答；`thinking` 控制是否启用思考模式 |
 | `scoreAnswer(question:, standardAnswer:, userAnswer:, imageBytes:, answerImages:)` | 给主观题打 0-10 分，供填空/解释题判分；`imageBytes` 是题目配图，`answerImages` 是学生上传的作答图片（可多张） |
 | `explainQuestion(question:, options:, correctAnswer:, imageBytes:)` | 生成选择题解析，供「AI 解析」按钮使用 |
+| `extractKnowledgePoints(bankName:, questionsText:)` | 通读题库摘要，归纳知识点，返回 `List<String>` |
+| `generateQuestionsFromKnowledge(topic:, knowledgePoints:, types:, count:)` | 围绕知识点生成变式题，返回原始 JSON 文本 |
+| `parseKnowledgePoints(raw)` | 解析知识点 JSON，容忍代码围栏与多余文字 |
 | `sseDelta(line)` | 解析一行 SSE，区分正文 `content` 与思考过程 `reasoning_content` |
 
 说明：
@@ -359,16 +401,18 @@ API Key 从 `AppConfig.dsApiKey` 读取，未配置时抛 `DsApiException`。
 
 ### MistakeBooks（`lib/services/mistake_books.dart`）
 
-错题本的收集与统计。文件放在 App Support 目录的 `mistakes/` 下，每本一个
-`Alpha.json` 这样的文件，配图按错题编号重命名后放在同一目录。
+错题本的收集与统计。文件放在 App Support 目录的 `mistakes/` 下，**按题库文件夹分组**：
+`mistakes/<文件夹名>/Alpha.json`，配图按错题编号重命名后放在本子同一目录；
+`deleted_origins.json` 在根目录，全局共享。老版本直接放在根目录的本子归为
+「未分组」（组名空字符串），列表里排最后。
 
 | 成员 | 说明 |
 | --- | --- |
 | `perBook` | 一本最多 25 题 |
 | `initialScore` | 收进错题本时的初始 `mistakeScore`（3） |
 | `directory()` | 返回 `mistakes/` 目录，不存在则创建 |
-| `list()` | 列出所有本子及各自「已完成 / 总数」，按 Alpha、Beta…… 排序 |
-| `collectFromBanks()` | 扫描所有题库，把 `wrongCount > 0` 且未收集过的题复制进来，返回新增数 |
+| `list()` | 递归列出所有分组的本子（含所属组名），按「组名 + Alpha…Omega」排序 |
+| `collectFromBanks()` | 扫描所有题库，把 `wrongCount > 0` 且未收集过的题按题库文件夹分组复制进来（组内分本/编号），返回新增数 |
 | `migrateAllBankIds()` | 启动时迁移所有已添加目录下的题库 id（幂等；只读判断，已迁移的不重写） |
 | `migrateBankIdsInDirectory(dir)` | 添加题库目录时立即迁移该目录下所有题库的题目 id（幂等） |
 | `resetAll()` | 设置页「重置错题本」按钮调用的手动重置：删除所有错题本（JSON + 配图）并清空删除史 |
@@ -378,11 +422,13 @@ API Key 从 `AppConfig.dsApiKey` 读取，未配置时抛 `DsApiException`。
 `q_` 前缀的稳定随机串（与文件位置无关），老版本记录的
 `'<原题库文件引用>#<原题 id>'` 会在收集时按 `旧键 → 新键` 映射自动迁移
 （原文件回写失败时新收录仍用旧格式，去重时新旧键都查，保证不重复收集）。
-编号 `C001` 由已有本子里的最大编号递增得出。
+编号 `C001` 在组内独立递增（从该组已有本子的最大编号继续）。
 
 迁移时机：App 启动时（[`migrateAllBankIds`](lib/services/mistake_books.dart)）、
 添加题库目录时（[`migrateBankIdsInDirectory`](lib/services/mistake_books.dart)）与
 进入错题本页（`collectFromBanks`）各做一次，均幂等。
+除了用户添加的目录，启动与收集还会额外覆盖 App 内置的 AI 出题目录
+（`Question/<主题>`），保证两边的题目 id 与错题去重键一致。
 启动时只读一遍文件判断，已迁移的题库不会重写，因此后续启动开销很小。
 错题本重置由设置页「重置错题本」按钮手动触发
 （[`resetAll`](lib/services/mistake_books.dart)）：删除 `mistakes/` 下所有
@@ -398,11 +444,22 @@ API Key 从 `AppConfig.dsApiKey` 读取，未配置时抛 `DsApiException`。
 | --- | --- |
 | `MainScreen` | 底部导航 + `IndexedStack`，保存当前选中的题库 |
 | `MainScreen._openBank(QuestionBankFile)` | 点击题库后的回调：保存选中项并切到练习 tab |
-| `QuestionBankPage(onOpenBank:)` | 扫描目录，点击文件时把 `QuestionBankFile` 交给父级 |
+| `QuestionBankPage(onOpenBank:)` | 扫描用户添加的目录 + 内置 AI 出题目录（`Question/`），点击文件时把 `QuestionBankFile` 交给父级；每行右侧 ✨ 进入 AI 变式出题 |
 | `PracticePage(bank:)` | 接收题库并完成加载、答题、统计、回拷 |
-| `MePage` | 个人中心，提供「错题本」「设置」两个入口 |
-| `SettingsPage` | 设置页（目前只有 DeepSeek 密钥一项） |
-| `MistakeBooksPage` | 错题本二级页面：进入时收集并列出 Alpha、Beta…… 各本 |
+| `MePage` | 个人中心，提供「快速开始」「错题本」「AI 出题」「设置」四个入口 |
+| `QuickStartPage` | 快速开始：读取 `assets/texts/quick_start.md` 并用简单 Markdown 排版展示 |
+| `SettingsPage` | 设置页：DeepSeek 密钥、应用更新（下载 APK）、重置错题本 |
+| `MistakeBooksPage` | 错题本二级页面：进入时收集并按题库文件夹分组列出各本 |
+| `AiGeneratePage` | AI 出题：输入主题/要求生成 25 道题保存到 `Question/`，列出已生成题库 |
+| `VariantGeneratePage(source:)` | AI 变式出题：读取源题库、归纳知识点、分批生成并按希腊字母递增命名写到同目录 |
+
+### 组件（widgets）
+
+| 组件 | 说明 |
+| --- | --- |
+| `QuoteCard` | 首页语录卡，从 `assets/texts/quotes.txt` 随机取句 |
+| `QuestionImage` | 题目配图，从题库目录读字节渲染，缺失/损坏显示占位框 |
+| `MathText` | 支持 LaTeX 的文本：解析 `$...$` / `\(...\)`（行内）与 `$$...$$` / `\[...\]`（独立公式），用 flutter_math_fork 渲染；无公式时退化为普通 `Text` / `SelectableText` |
 
 ## 页面切换与状态
 
@@ -501,19 +558,25 @@ const QuoteCard(assetPath: 'assets/texts/other.txt'),
 
 ### 存储访问：SAF（不申请任何存储权限）
 
-`android/app/src/main/AndroidManifest.xml` 里只有一条权限：
+`android/app/src/main/AndroidManifest.xml` 里有两条权限：
 
 ```xml
 <uses-permission android:name="android.permission.INTERNET" />
+<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 ```
 
 `INTERNET` 是 AI 判分 / AI 解析访问 `https://api.deepseek.com` 用的，普通权限、安装时不弹窗。
+`REQUEST_INSTALL_PACKAGES` 是「设置 → 应用更新」下载完 APK 后拉起系统安装器用的；
+Android 8+ 首次使用还要用户在系统里打开「允许安装未知应用」，否则 App 会跳到授权页并提示重试。
 构建产物里另有 AndroidX 自动合并的 `DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`（非存储类，无需授权）。
 
 > 注意：Flutter 只在 `src/debug` 和 `src/profile` 的模板 manifest 里自动加 `INTERNET`，
 > **release 包必须在主 manifest 显式声明**。漏了的话手机端会报
 > `网络请求失败：Failed host lookup: 'api.deepseek.com'`，而桌面端不受影响（Windows 没有这层权限控制）。
 > 排查方法：`aapt2 dump permissions app-release.apk` 看有没有 `INTERNET`。
+
+应用内更新的 APK 通过 `FileProvider`（authority 为 `<applicationId>.fileprovider`）共享，
+路径配置在 `android/app/src/main/res/xml/update_file_paths.xml`，只放行缓存目录下的 `updates/`。
 
 读写流程：
 

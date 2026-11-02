@@ -8,6 +8,9 @@
     -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- 应用内更新：下载新 APK 后调起系统安装器 -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <!--
         题库文件的读写走 SAF（Storage Access Framework）：
         用户在系统目录选择器里显式授权某个文件夹，应用拿到持久化的
@@ -45,6 +48,17 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+
+        <!-- 应用内更新：把缓存目录里的 APK 通过 FileProvider 交给系统安装器 -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/update_file_paths" />
+        </provider>
     </application>
 
     <!-- Flutter 引擎的 ProcessTextPlugin 需要查询能处理文本的 Activity -->

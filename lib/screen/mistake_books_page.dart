@@ -52,12 +52,12 @@ class _MistakeBooksPageState extends State<MistakeBooksPage> {
 
   /// 打开某一本开始练习，练完回来刷新完成状态。
   Future<void> _open(MistakeBookInfo book) async {
-    final Directory dir = await MistakeBooks.directory();
-    if (!mounted) return;
-
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => PracticePage(bank: book.toBankFile(dir.path)),
+        builder: (_) => PracticePage(
+          // 配图就在本子所在文件夹里（可能是分组子文件夹）
+          bank: book.toBankFile(File(book.path).parent.path),
+        ),
       ),
     );
 
@@ -173,61 +173,102 @@ class _MistakeBooksPageState extends State<MistakeBooksPage> {
       );
     }
 
-    return ListView.separated(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      itemCount: _books.length,
-      separatorBuilder: (_, _) => const Divider(height: 1, indent: 16),
-      itemBuilder: (BuildContext context, int index) {
-        final MistakeBookInfo book = _books[index];
-        final bool finished = book.isFinished;
+    // 按题库文件夹分组显示：同一文件夹的错题本列在同一个组标题下
+    final Map<String, List<MistakeBookInfo>> groups =
+        <String, List<MistakeBookInfo>>{};
+    for (final MistakeBookInfo book in _books) {
+      groups.putIfAbsent(book.groupName, () => <MistakeBookInfo>[]).add(book);
+    }
 
-        return ListTile(
-          leading: Icon(
-            finished ? Icons.check_circle : Icons.menu_book_outlined,
-            color: finished
-                ? colorScheme.primary
-                : colorScheme.onSurfaceVariant,
-          ),
-          title: Text(book.name),
-          subtitle: Text('${book.total} 题'),
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: <Widget>[
-                  Text(
-                    finished ? '已完成' : '未完成',
+    return ListView(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      children: <Widget>[
+        for (final MapEntry<String, List<MistakeBookInfo>> group
+            in groups.entries) ...<Widget>[
+          // 组标题：文件夹图标 + 文件夹名
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+            child: Row(
+              children: <Widget>[
+                Icon(
+                  Icons.folder_outlined,
+                  size: 18,
+                  color: colorScheme.onSurfaceVariant,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    group.key.isEmpty ? '未分组' : group.key,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      fontSize: 13,
+                      fontSize: 14,
                       fontWeight: FontWeight.w600,
-                      color: finished
-                          ? colorScheme.primary
-                          : colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    '${book.completed}/${book.total}',
-                    style: TextStyle(
-                      fontSize: 12,
                       color: colorScheme.onSurfaceVariant,
                     ),
                   ),
-                ],
+                ),
+              ],
+            ),
+          ),
+          // 组内每本错题本缩进显示
+          for (final MistakeBookInfo book in group.value)
+            Padding(
+              padding: const EdgeInsets.only(left: 12),
+              child: _buildBookTile(colorScheme, book),
+            ),
+        ],
+      ],
+    );
+  }
+
+  /// 单本错题本列表项：组内缩进，保持一致的本子样式。
+  Widget _buildBookTile(ColorScheme colorScheme, MistakeBookInfo book) {
+    final bool finished = book.isFinished;
+
+    return ListTile(
+      leading: Icon(
+        finished ? Icons.check_circle : Icons.menu_book_outlined,
+        color: finished ? colorScheme.primary : colorScheme.onSurfaceVariant,
+      ),
+      title: Text(book.name),
+      subtitle: Text('${book.total} 题'),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: <Widget>[
+              Text(
+                finished ? '已完成' : '未完成',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: finished
+                      ? colorScheme.primary
+                      : colorScheme.onSurfaceVariant,
+                ),
               ),
-              const SizedBox(width: 4),
-              IconButton(
-                tooltip: '删除错题本',
-                onPressed: () => _delete(book),
-                icon: Icon(Icons.delete_outline, color: colorScheme.error),
+              const SizedBox(height: 2),
+              Text(
+                '${book.completed}/${book.total}',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: colorScheme.onSurfaceVariant,
+                ),
               ),
             ],
           ),
-          onTap: () => _open(book),
-        );
-      },
+          const SizedBox(width: 4),
+          IconButton(
+            tooltip: '删除错题本',
+            onPressed: () => _delete(book),
+            icon: Icon(Icons.delete_outline, color: colorScheme.error),
+          ),
+        ],
+      ),
+      onTap: () => _open(book),
     );
   }
 }

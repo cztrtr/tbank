@@ -40,8 +40,8 @@ class Saf {
   ///
   /// 选中的目录会立刻申请持久授权，重启 App 后依然可读写。
   static Future<SafDirectory?> pickDirectory() async {
-    final Map<String, dynamic>? result =
-        await _channel.invokeMapMethod<String, dynamic>('pickDirectory');
+    final Map<String, dynamic>? result = await _channel
+        .invokeMapMethod<String, dynamic>('pickDirectory');
     if (result == null) return null;
 
     final String? uri = result['uri'] as String?;
@@ -98,6 +98,22 @@ class Saf {
       'uri': directoryUri,
       'name': fileName,
     });
+  }
+
+  /// 在目录里新建（或覆盖）一个 UTF-8 文本文件，返回它的 document URI。
+  ///
+  /// 同名文件已存在时直接覆盖内容；不存在时用 DocumentsContract.createDocument
+  /// 创建。写入的 MIME 固定为 `application/json`。
+  static Future<String> writeChildText(
+    String directoryUri,
+    String fileName,
+    String text,
+  ) async {
+    final String? uri = await _channel.invokeMethod<String>(
+      'writeChildText',
+      <String, dynamic>{'uri': directoryUri, 'name': fileName, 'text': text},
+    );
+    return uri ?? '';
   }
 
   /// 释放某个目录的持久授权（用户移除目录时调用）。

@@ -77,6 +77,11 @@ kotlin {
     }
 }
 
+dependencies {
+    // 应用内更新用 FileProvider 把缓存的 APK 交给系统安装器
+    implementation("androidx.core:core-ktx:1.13.1")
+}
+
 flutter {
     source = "../.."
 }

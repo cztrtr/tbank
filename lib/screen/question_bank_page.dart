@@ -4,10 +4,12 @@ import 'package:file_picker/file_picker.dart'; // 桌面端的目录选择器
 import 'package:flutter/material.dart';
 
 import '../models/question_bank_file.dart'; // 公共的题库文件模型
+import '../services/ai_question_generator.dart'; // AI 出题目录（Question/）也要列出来
 import '../services/app_config.dart'; // 题库目录的全局列表
 import '../services/bank_io.dart'; // 统一的目录/文件访问入口
 import '../services/mistake_books.dart'; // 添加目录时提前迁移题目 id
 import '../services/saf.dart'; // Android 的 SAF 目录选择
+import 'variant_generate_page.dart'; // 基于已有题库的知识点重新出题
 
 /// 题库管理页：
 /// - 右上角加号添加题库目录；
@@ -95,6 +97,29 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
       }
     }
 
+    // App 内置的 AI 出题目录（Question/<主题>）也显示在管理页，
+    // 按主题名分组；单个主题读取失败不影响其它主题。
+    try {
+      for (final ({String name, String path}) topic
+          in await AiQuestionGenerator.listTopicDirectories()) {
+        try {
+          final List<QuestionBankFile> found = await BankIo.listJsonFiles(
+            topic.path,
+            directoryName: topic.name,
+          );
+          for (final QuestionBankFile file in found) {
+            if (seen.add(file.uri)) {
+              files.add(file);
+            }
+          }
+        } catch (error) {
+          debugPrint('扫描 AI 出题目录失败：${topic.path} $error');
+        }
+      }
+    } catch (error) {
+      debugPrint('读取 AI 出题目录失败：$error');
+    }
+
     // 页面已销毁，或已经开始了更新的扫描：丢弃这次结果
     if (!mounted || generation != _scanGeneration) return;
 
@@ -161,6 +186,20 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
     }
   }
 
+  /// 打开「AI 变式出题」页：基于这份题库的知识点重新出题。
+  ///
+  /// 生成的新文件会落在同一个目录（按希腊字母递增命名，如 `xxx-alpha.json`），
+  /// 返回后重新扫描一次，让它立刻出现在列表里。
+  Future<void> _openVariantPage(QuestionBankFile file) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => VariantGeneratePage(source: file),
+      ),
+    );
+    if (!mounted) return;
+    unawaited(_scanFiles());
+  }
+
   /// 从 config.json 移除某个题库文件所在的目录记录，并释放 SAF 授权。
   ///
   /// 只删配置记录和目录授权，不删除磁盘上的任何文件。
@@ -168,6 +207,14 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
   Future<void> _removeDirectoryFor(QuestionBankFile file) async {
     final String dirRef = file.directoryRef;
     final String dirName = file.directoryName ?? BankIo.displayNameOf(dirRef);
+
+    // AI 出题生成的目录是 App 内置的，不在 config.json 里，没有配置记录可移除
+    if (!AppConfig.questionBankDirsNotifier.value.contains(dirRef)) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('这是 AI 出题生成的目录，没有配置记录可移除')));
+      return;
+    }
 
     // 二次确认，明确告诉用户不会删除题目文件
     final bool? confirmed = await showDialog<bool>(
@@ -388,28 +435,42 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
         children.add(
           Padding(
             padding: const EdgeInsets.only(left: 12, bottom: 8),
-            child: SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                // 把选中的题库交给父页面；MainScreen 会切到练习页
-                onPressed: () => widget.onOpenBank(file),
-                icon: const Icon(Icons.description_outlined),
-                label: Text(
-                  file.displayName, // 只显示题库名，不带 .json 后缀
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                style: OutlinedButton.styleFrom(
-                  alignment: Alignment.centerLeft,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 14,
+            child: Row(
+              children: <Widget>[
+                Expanded(
+                  child: OutlinedButton.icon(
+                    // 把选中的题库交给父页面；MainScreen 会切到练习页
+                    onPressed: () => widget.onOpenBank(file),
+                    icon: const Icon(Icons.description_outlined),
+                    label: Text(
+                      file.displayName, // 只显示题库名，不带 .json 后缀
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      alignment: Alignment.centerLeft,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 14,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
                   ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
+                ),
+                const SizedBox(width: 4),
+                IconButton(
+                  tooltip: 'AI 变式出题',
+                  // 读取这份题库的知识点，重新出题并保存为 xxx-alpha.json / xxx-beta.json…
+                  onPressed: () => _openVariantPage(file),
+                  icon: Icon(
+                    Icons.auto_awesome,
+                    size: 20,
+                    color: colorScheme.primary,
                   ),
                 ),
-              ),
+              ],
             ),
           ),
         );

@@ -15,6 +15,7 @@ import '../services/app_config.dart';
 import '../services/bank_io.dart';
 import '../services/ds_api_service.dart';
 import '../services/question_bank_storage.dart';
+import '../widgets/math_text.dart';
 import '../widgets/question_image.dart';
 
 /// 练习页：加载题库、逐题作答、更新统计并回写文件。
@@ -628,7 +629,7 @@ class _PracticePageState extends State<PracticePage>
           ],
         ),
         const SizedBox(height: 18),
-        Text(
+        MathText(
           question.question,
           style: Theme.of(context).textTheme.titleMedium
               ?.copyWith(height: 1.5, fontWeight: FontWeight.w600),
@@ -885,9 +886,10 @@ class _PracticePageState extends State<PracticePage>
             children: <Widget>[
               const Text('参考答案', style: TextStyle(fontSize: 12)),
               const SizedBox(height: 6),
-              SelectableText(
+              MathText(
                 question.correctAnswers.join('\n'),
                 style: const TextStyle(fontSize: 16, height: 1.5),
+                selectable: true,
               ),
             ],
           ),
@@ -942,7 +944,7 @@ class _PracticePageState extends State<PracticePage>
             style: TextStyle(fontWeight: FontWeight.w700, color: foreground),
           ),
           const SizedBox(height: 6),
-          Text(
+          MathText(
             '正确答案：${_answerText(question)}',
             style: TextStyle(color: foreground),
           ),
@@ -1001,9 +1003,10 @@ class _PracticePageState extends State<PracticePage>
             ],
           ),
           const SizedBox(height: 8),
-          SelectableText(
+          MathText(
             question.analysis,
             style: const TextStyle(fontSize: 14, height: 1.6),
+            selectable: true,
           ),
         ],
       ),
@@ -1086,9 +1089,10 @@ class _PracticePageState extends State<PracticePage>
                 ),
               ),
             ] else
-              SelectableText(
+              MathText(
                 _aiAnalysis!,
                 style: const TextStyle(fontSize: 14, height: 1.6),
+                selectable: true,
               ),
           ],
         ),
@@ -1285,7 +1289,7 @@ class _OptionButton extends StatelessWidget {
             ),
             const SizedBox(width: 12),
             Expanded(
-              child: Text(option.text, style: TextStyle(color: foreground)),
+              child: MathText(option.text, style: TextStyle(color: foreground)),
             ),
             // 判分后右侧显示勾或叉
             if (answered && isCorrect)

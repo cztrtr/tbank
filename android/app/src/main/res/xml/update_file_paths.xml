@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  应用内更新用的 FileProvider 路径。
+
+  Dart 侧把 app-release.apk 下载到 getTemporaryDirectory()/updates/，
+  在 Android 上就是 cacheDir/updates/，所以这里配置 cache-path；
+  外部缓存目录同样放行，兼容不同 ROM。
+-->
+<paths>
+    <cache-path name="updates" path="updates/" />
+    <external-cache-path name="external_updates" path="updates/" />
+</paths>

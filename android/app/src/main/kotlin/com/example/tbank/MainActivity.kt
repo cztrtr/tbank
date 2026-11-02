@@ -3,12 +3,16 @@ package com.example.tbank
 import android.app.Activity
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.DocumentsContract
+import android.provider.Settings
+import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import java.io.File
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -23,11 +27,16 @@ import java.util.concurrent.Executors
  * - listChildren        列出目录下的文件（可按扩展名过滤）
  * - readText            按 URI 读 UTF-8 文本
  * - writeText           按 URI 覆盖写 UTF-8 文本
+ * - writeChildText      在目录里按文件名新建/覆盖 UTF-8 文本（返回文档 URI）
  * - readChildBytes      在目录里按文件名找子文件并读成字节（配图用）
  * - releasePermission   释放某个 tree 的持久授权
+ *
+ * 另一个通道 `tbank/app_update` 负责应用内更新：
+ * - installApk          按文件路径拉起系统安装器（需要 FileProvider）
  */
 class MainActivity : FlutterActivity() {
     private val channelName = "tbank/saf"
+    private val updateChannelName = "tbank/app_update"
     private val requestPickDirectory = 0x5AF1
 
     private var pendingPickResult: MethodChannel.Result? = null
@@ -62,6 +71,16 @@ class MainActivity : FlutterActivity() {
                                 runIo(result) { writeText(uri, text); true }
                             }
                         }
+                        "writeChildText" -> {
+                            val dir = call.argument<String>("uri")
+                            val name = call.argument<String>("name")
+                            val text = call.argument<String>("text")
+                            if (dir == null || name == null || text == null) {
+                                result.error("bad_args", "缺少 uri、name 或 text", null)
+                            } else {
+                                runIo(result) { writeChildText(dir, name, text) }
+                            }
+                        }
                         "readChildBytes" -> {
                             val dir = call.argument<String>("uri")
                             val name = call.argument<String>("name")
@@ -80,6 +99,26 @@ class MainActivity : FlutterActivity() {
                     }
                 } catch (e: Exception) {
                     result.error("saf_error", e.message ?: e.toString(), null)
+                }
+            }
+
+        // ---- 应用内更新：下载完成后拉起系统安装器 ----
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, updateChannelName)
+            .setMethodCallHandler { call, result ->
+                try {
+                    when (call.method) {
+                        "installApk" -> {
+                            val path = call.argument<String>("path")
+                            if (path == null) {
+                                result.error("bad_args", "缺少 path", null)
+                            } else {
+                                result.success(installApk(path))
+                            }
+                        }
+                        else -> result.notImplemented()
+                    }
+                } catch (e: Exception) {
+                    result.error("update_error", e.message ?: e.toString(), null)
                 }
             }
     }
@@ -207,6 +246,59 @@ class MainActivity : FlutterActivity() {
         } ?: throw IllegalStateException("无法写入文件：$uriString")
     }
 
+    /**
+     * 在 [dirUriString] 指向的目录里新建或覆盖 [fileName]，写入 UTF-8 文本。
+     *
+     * 先查同名字档：存在就覆盖内容；不存在就用 createDocument 新建
+     * （MIME 用 application/json，文件提供方会据此补 .json 扩展名）。
+     * 返回最终文档 URI，方便调用方后续直接读写。
+     */
+    private fun writeChildText(dirUriString: String, fileName: String, text: String): String {
+        val tree = Uri.parse(dirUriString)
+        val parentDocId = DocumentsContract.getTreeDocumentId(tree)
+        val parentDocUri = DocumentsContract.buildDocumentUriUsingTree(tree, parentDocId)
+        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(tree, parentDocId)
+
+        var existingId: String? = null
+        contentResolver.query(
+            childrenUri,
+            arrayOf(
+                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME
+            ),
+            null,
+            null,
+            null
+        )?.use { cursor ->
+            while (cursor.moveToNext()) {
+                val name = cursor.getString(1) ?: continue
+                if (name == fileName) {
+                    existingId = cursor.getString(0)
+                    break
+                }
+            }
+        }
+
+        val docUri = if (existingId != null) {
+            DocumentsContract.buildDocumentUriUsingTree(tree, existingId!!)
+        } else {
+            DocumentsContract.createDocument(
+                contentResolver,
+                parentDocUri,
+                "application/json",
+                fileName
+            ) ?: throw IllegalStateException("无法创建文件：$fileName")
+        }
+
+        // "wt" = write + truncate，避免覆盖后残留旧内容
+        contentResolver.openOutputStream(docUri, "wt")?.use { output ->
+            output.write(text.toByteArray(Charsets.UTF_8))
+            output.flush()
+        } ?: throw IllegalStateException("无法写入文件：$fileName")
+
+        return docUri.toString()
+    }
+
     private fun readChildBytes(dirUriString: String, fileName: String): ByteArray? {
         val tree = Uri.parse(dirUriString)
         val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
@@ -251,6 +343,43 @@ class MainActivity : FlutterActivity() {
         } catch (_: SecurityException) {
             // 没授权过就不用管
         }
+    }
+
+    // ---------------------------------------------------------------- 应用更新
+
+    /**
+     * 拉起系统安装器安装 [path] 指向的 APK。
+     *
+     * Android 8+ 需要「安装未知应用」权限；没有时跳到授权页并返回 "permission"。
+     * 返回 "ok" 表示安装界面已经打开。
+     */
+    private fun installApk(path: String): String {
+        val file = File(path)
+        if (!file.exists()) {
+            throw IllegalStateException("安装包不存在：$path")
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            !packageManager.canRequestPackageInstalls()
+        ) {
+            val settingsIntent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES)
+                .setData(Uri.parse("package:$packageName"))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(settingsIntent)
+            return "permission"
+        }
+
+        val apkUri = FileProvider.getUriForFile(
+            this,
+            "$packageName.fileprovider",
+            file
+        )
+        val intent = Intent(Intent.ACTION_VIEW)
+            .setDataAndType(apkUri, "application/vnd.android.package-archive")
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        startActivity(intent)
+        return "ok"
     }
 
     private fun displayNameOfTree(uri: Uri): String {
