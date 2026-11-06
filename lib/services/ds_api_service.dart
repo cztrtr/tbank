@@ -2,43 +2,12 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:http/http.dart' as http;
-
 import 'app_config.dart';
+import 'ds_api_exception.dart';
+import 'ds_transport.dart';
 
-/// DeepSeek API 调用失败时抛出的异常。
-///
-/// 界面直接 `catch (DsApiException e)` 即可拿到可读的中文提示。
-class DsApiException implements Exception {
-  DsApiException(this.message, {this.statusCode, this.body});
-
-  /// 可直接展示给用户的提示。
-  final String message;
-
-  /// HTTP 状态码；网络层失败时为 null。
-  final int? statusCode;
-
-  /// 原始响应体，排查问题时用。
-  final String? body;
-
-  @override
-  String toString() => message;
-}
-
-/// 流式响应里的一小段：可能携带正文，也可能携带思考过程。
-class DsStreamDelta {
-  const DsStreamDelta({this.content, this.reasoning});
-
-  /// 回答正文（delta.content）。
-  final String? content;
-
-  /// 思考过程（delta.reasoning_content），仅启用推理时出现。
-  final String? reasoning;
-
-  bool get isEmpty =>
-      (content == null || content!.isEmpty) &&
-      (reasoning == null || reasoning!.isEmpty);
-}
+export 'ds_api_exception.dart';
+export 'ds_transport.dart' show DsStreamDelta;
 
 /// DeepSeek 对话 API 的封装（OpenAI 兼容协议），固定使用 `deepseek-flash`。
 ///
@@ -66,8 +35,12 @@ class DsApiService {
 
   static const String _baseUrl = 'https://api.deepseek.com';
 
-  /// 请求超时时间；启用推理时产出较长，不宜过短。
-  static const Duration _timeout = Duration(seconds: 120);
+  /// 普通请求（判分 / 解析 / 问答）的超时。
+  static const Duration _defaultTimeout = Duration(seconds: 120);
+
+  /// 出题类请求的超时：一次最多生成 25 道题的完整 JSON，输出很长，
+  /// 给足 5 分钟，避免长输出被中途掐断。
+  static const Duration _generationTimeout = Duration(seconds: 300);
 
   /// 发起一次对话，返回完整回答文本。
   ///
@@ -108,6 +81,7 @@ class DsApiService {
     required bool thinking,
     void Function(String delta)? onDelta,
     void Function(String delta)? onReasoning,
+    Duration timeout = _defaultTimeout,
   }) async {
     final String apiKey = (AppConfig.dsApiKey ?? '').trim();
     if (apiKey.isEmpty) {
@@ -131,8 +105,15 @@ class DsApiService {
     };
 
     return stream
-        ? _chatStream(uri, headers, payload, onDelta, onReasoning)
-        : _chatOnce(uri, headers, payload, onReasoning);
+        ? DsTransport.chatStream(
+            uri,
+            headers,
+            payload,
+            onDelta,
+            onReasoning,
+            timeout,
+          )
+        : DsTransport.chatOnce(uri, headers, payload, onReasoning, timeout);
   }
 
   // ---------------------------------------------------------------- 判分
@@ -190,23 +171,35 @@ class DsApiService {
     return _parseScore(raw);
   }
 
-  /// 让 AI 生成一道选择题的解析（为什么对、其它选项为什么错）。
+  /// 让 AI 生成一道题的解析。
   ///
-  /// [options] 是已格式化的选项文本，一行一个，例如 `A. 上海`；
-  /// [correctAnswer] 形如 `B. 北京`。有配图时一起发送。
+  /// [options] 是已格式化的选项文本，一行一个，例如 `A. 上海`；主观题传空串。
+  /// [correctAnswer] 形如 `B. 北京`，主观题就是标准答案文本。
+  /// [userAnswer] 是学生的主观题作答文字（可选）；[answerImages] 是作答图片。
+  /// 题目自带配图时用 [imageBytes] 一起发送。
   static Future<String> explainQuestion({
     required String question,
     required String options,
     required String correctAnswer,
+    String? userAnswer,
     Uint8List? imageBytes,
+    List<Uint8List> answerImages = const <Uint8List>[],
   }) async {
+    final bool hasOptions = options.trim().isNotEmpty;
+    final String studentAnswer = (userAnswer ?? '').trim();
+
+    // 选择题讲「为什么对、别的选项为什么错」；主观题讲「怎么做、作答错在哪」
+    final String task = hasOptions
+        ? '- 说明正确答案为什么正确；\n- 简要说明其它选项为什么不对；'
+        : '- 给出清晰的解题思路和完整推导步骤；\n'
+              '- 如果附有学生作答，指出思路是否正确、错在哪里、应如何改正；';
+
     final String prompt =
         '''
-你是大学课程答疑老师。请针对下面这道选择题给出解析。
+你是大学课程答疑老师。请针对下面这道题给出解析。
 
 要求：
-- 说明正确答案为什么正确；
-- 简要说明其它选项为什么不对；
+$task
 - 如果有附图，结合图片内容解释；
 - 数学表达式一律用 LaTeX 表示：行内公式用 \$...\$，独立公式用 \$\$...\$\$；
 - 每个公式都必须完整包在 \$...\$ 或 \$\$...\$\$ 里，禁止把 \\frac、\\sqrt 等命令裸写在正文中，
@@ -219,14 +212,16 @@ class DsApiService {
 
 题目：$question
 
-选项：
-$options
-
-正确答案：$correctAnswer
+${hasOptions ? '选项：\n$options\n' : ''}正确答案：$correctAnswer
+${studentAnswer.isEmpty ? '' : '\n学生作答：$studentAnswer'}
 ''';
 
     final String text = await _send(
-      _withImages(prompt, questionImage: imageBytes),
+      _withImages(
+        prompt,
+        questionImage: imageBytes,
+        answerImages: answerImages,
+      ),
       stream: false,
       thinking: false,
     );
@@ -271,7 +266,12 @@ $options
 ${_questionFormatRules(safeCount)}
 ''';
 
-    return _send(prompt, stream: false, thinking: false);
+    return _send(
+      prompt,
+      stream: false,
+      thinking: false,
+      timeout: _generationTimeout,
+    );
   }
 
   /// 通读一份题库的题目，归纳出它们覆盖的知识点。
@@ -335,7 +335,64 @@ $points
 ${_questionFormatRules(safeCount)}
 ''';
 
-    return _send(prompt, stream: false, thinking: false);
+    return _send(
+      prompt,
+      stream: false,
+      thinking: false,
+      timeout: _generationTimeout,
+    );
+  }
+
+  /// 根据用户拍摄的图片生成练习题（拍书出题）。
+  ///
+  /// 图片里可以是**题目**（模仿出同类型新题），也可以是**知识点讲解**
+  /// （围绕图中内容出题）；[requirements] 是用户补充的具体出题要求，
+  /// 为空时只要求围绕图片内容出题。
+  ///
+  /// 图片会以「用户拍摄的图片」标签发给模型，见 [_withImages]。
+  static Future<String> generateQuestionsFromImages({
+    required List<Uint8List> images,
+    required String requirements,
+    required List<String> types,
+    required int count,
+  }) async {
+    final List<Uint8List> valid = images
+        .where((Uint8List bytes) => bytes.isNotEmpty)
+        .toList();
+    if (valid.isEmpty) {
+      throw DsApiException('请先拍照或选择图片');
+    }
+
+    final String typeList = types.join('、');
+    final int safeCount = count < 1 ? 1 : count;
+    final String requirementText = requirements.trim().isEmpty
+        ? '（未填写，围绕图片内容出题即可）'
+        : requirements.trim();
+
+    final String prompt =
+        '''
+你是学科出题老师。下面附上了用户拍摄的图片，可能是教材 / 课件上的**知识点讲解**，
+也可能是**题目**。请先仔细识别图片内容，再按要求出一批练习题。
+
+用户的具体出题要求：$requirementText
+
+出题要求：
+- 共生成 $safeCount 道题；
+- 图片里是题目：优先模仿图片中题目的题型、难度和考点，出同类型的新题
+  （换数字、换情景），不要照抄原图；
+- 图片里是知识点讲解：围绕图中的知识点出题，尽量覆盖图中所有考点；
+- 用户的具体要求与图片内容冲突时，以用户要求为准；
+- 题型：$typeList。
+
+${_questionFormatRules(safeCount)}
+''';
+
+    return _send(
+      _withImages(prompt, answerImages: valid, answerImagesLabel: '用户拍摄的图片'),
+      stream: false,
+      thinking: false,
+      timeout: _generationTimeout,
+    );
   }
 
   /// 从模型输出里解析知识点列表，容忍代码围栏与多余文字。
@@ -419,7 +476,8 @@ ${_questionFormatRules(safeCount)}
   /// 把提示词和可选图片组装成请求的 content。
   ///
   /// - [questionImage]：题干配图；
-  /// - [answerImages]：学生作答图片，可以多张。
+  /// - [answerImages]：学生作答图片（拍书出题时是用户拍摄的图片），可以多张；
+  /// - [answerImagesLabel]：这组图片的文字标签，默认「学生作答图片」。
   ///
   /// 两类图片都带一行文字标签，避免模型把「题目配图」和「学生答案」
   /// 混在一起。没有任何图片时返回纯文本，保持普通请求的形态。
@@ -427,6 +485,7 @@ ${_questionFormatRules(safeCount)}
     String prompt, {
     Uint8List? questionImage,
     List<Uint8List> answerImages = const <Uint8List>[],
+    String answerImagesLabel = '学生作答图片',
   }) {
     final List<Uint8List> answers = answerImages
         .where((Uint8List bytes) => bytes.isNotEmpty)
@@ -448,7 +507,7 @@ ${_questionFormatRules(safeCount)}
     if (answers.isNotEmpty) {
       content.add(<String, dynamic>{
         'type': 'text',
-        'text': '学生作答图片（共 ${answers.length} 张）：',
+        'text': '$answerImagesLabel（共 ${answers.length} 张）：',
       });
       for (final Uint8List bytes in answers) {
         content.add(_imageBlock(bytes));
@@ -495,255 +554,8 @@ ${_questionFormatRules(safeCount)}
     return score.clamp(0, 10).toInt();
   }
 
-  // ---------------------------------------------------------------- 非流式
-
-  static Future<String> _chatOnce(
-    Uri uri,
-    Map<String, String> headers,
-    Map<String, dynamic> payload,
-    void Function(String delta)? onReasoning,
-  ) async {
-    final http.Client client = http.Client();
-    try {
-      final http.Response response = await client
-          .post(uri, headers: headers, body: jsonEncode(payload))
-          .timeout(_timeout);
-
-      final String body = utf8.decode(response.bodyBytes, allowMalformed: true);
-
-      if (response.statusCode != 200) {
-        throw _httpError(response.statusCode, body);
-      }
-
-      final dynamic json = jsonDecode(body);
-
-      final String reasoning = _extractMessageField(json, 'reasoning_content');
-      if (reasoning.isNotEmpty) {
-        onReasoning?.call(reasoning);
-      }
-
-      final String content = _extractMessageField(json, 'content');
-      if (content.isEmpty) {
-        throw DsApiException('DeepSeek 返回了空回答', body: body);
-      }
-      return content;
-    } on DsApiException {
-      rethrow;
-    } on TimeoutException {
-      throw DsApiException('请求超时（${_timeout.inSeconds} 秒），请检查网络后重试');
-    } on http.ClientException catch (error) {
-      throw DsApiException('网络请求失败：${error.message}');
-    } catch (error) {
-      throw DsApiException('请求失败：$error');
-    } finally {
-      client.close();
-    }
-  }
-
-  // ---------------------------------------------------------------- 流式
-
-  static Future<String> _chatStream(
-    Uri uri,
-    Map<String, String> headers,
-    Map<String, dynamic> payload,
-    void Function(String delta)? onDelta,
-    void Function(String delta)? onReasoning,
-  ) async {
-    final http.Client client = http.Client();
-    try {
-      final http.Request request = http.Request('POST', uri)
-        ..headers.addAll(headers)
-        ..body = jsonEncode(payload);
-
-      final http.StreamedResponse response = await client
-          .send(request)
-          .timeout(_timeout);
-
-      if (response.statusCode != 200) {
-        final String body = await response.stream.bytesToString();
-        throw _httpError(response.statusCode, body);
-      }
-
-      final StringBuffer buffer = StringBuffer();
-
-      await for (final String line
-          in response.stream
-              .transform(utf8.decoder)
-              .transform(const LineSplitter())) {
-        final String trimmed = line.trim();
-        if (trimmed.isEmpty) continue;
-
-        // 流结束标记
-        if (trimmed == 'data: [DONE]' || trimmed == 'data:[DONE]') break;
-
-        final DsStreamDelta? delta = sseDelta(trimmed);
-        if (delta == null || delta.isEmpty) continue;
-
-        final String? reasoning = delta.reasoning;
-        if (reasoning != null && reasoning.isNotEmpty) {
-          onReasoning?.call(reasoning);
-        }
-
-        final String? piece = delta.content;
-        if (piece != null && piece.isNotEmpty) {
-          buffer.write(piece);
-          onDelta?.call(piece);
-        }
-      }
-
-      final String content = buffer.toString();
-      if (content.isEmpty) {
-        throw DsApiException('DeepSeek 未返回任何内容，可能是流被中断');
-      }
-      return content;
-    } on DsApiException {
-      rethrow;
-    } on TimeoutException {
-      throw DsApiException('请求超时（${_timeout.inSeconds} 秒），请检查网络后重试');
-    } on http.ClientException catch (error) {
-      throw DsApiException('网络请求失败：${error.message}');
-    } catch (error) {
-      throw DsApiException('请求失败：$error');
-    } finally {
-      client.close();
-    }
-  }
-
   /// 从一行 SSE 中取出增量内容（正文与思考过程）。
   ///
-  /// 只处理 `data: {...}` 行；返回 null 表示这行不携带内容
-  /// （心跳、role 消息、`[DONE]`、格式错误等）。
-  /// 单行解析失败不会中断整个流。
-  static DsStreamDelta? sseDelta(String line) {
-    if (!line.startsWith('data:')) return null;
-
-    final String data = line.substring(5).trim();
-    if (data.isEmpty || data == '[DONE]') return null;
-
-    try {
-      final dynamic json = jsonDecode(data);
-      if (json is! Map) return null;
-
-      final dynamic choices = json['choices'];
-      if (choices is! List || choices.isEmpty) return null;
-
-      final dynamic first = choices.first;
-      if (first is! Map) return null;
-
-      final dynamic delta = first['delta'];
-      if (delta is! Map) return null;
-
-      final dynamic content = delta['content'];
-      final dynamic reasoning = delta['reasoning_content'];
-
-      final String? text = content is String && content.isNotEmpty
-          ? content
-          : null;
-      final String? thought = reasoning is String && reasoning.isNotEmpty
-          ? reasoning
-          : null;
-
-      if (text == null && thought == null) return null;
-      return DsStreamDelta(content: text, reasoning: thought);
-    } catch (_) {
-      return null;
-    }
-  }
-
-  // ---------------------------------------------------------------- 工具
-
-  /// 取出 choices[0].message 下的某个字符串字段。
-  static String _extractMessageField(dynamic json, String field) {
-    if (json is! Map) return '';
-
-    final dynamic choices = json['choices'];
-    if (choices is! List || choices.isEmpty) return '';
-
-    final dynamic first = choices.first;
-    if (first is! Map) return '';
-
-    final dynamic message = first['message'];
-    if (message is! Map) return '';
-
-    final dynamic value = message[field];
-    return value is String ? value.trim() : '';
-  }
-
-  /// 把 HTTP 错误码翻译成可读提示。
-  static DsApiException _httpError(int statusCode, String body) {
-    final String detail = _errorMessage(body);
-
-    switch (statusCode) {
-      case 400:
-        return DsApiException(
-          '请求参数有误（400）：$detail',
-          statusCode: statusCode,
-          body: body,
-        );
-      case 401:
-        return DsApiException(
-          'API Key 无效或已失效（401），请在设置里重新填写',
-          statusCode: statusCode,
-          body: body,
-        );
-      case 402:
-        return DsApiException(
-          '账户余额不足（402），请到 DeepSeek 平台充值',
-          statusCode: statusCode,
-          body: body,
-        );
-      case 422:
-        return DsApiException(
-          '请求格式错误（422）：$detail',
-          statusCode: statusCode,
-          body: body,
-        );
-      case 429:
-        return DsApiException(
-          '请求过于频繁（429），请稍后再试',
-          statusCode: statusCode,
-          body: body,
-        );
-      case 500:
-        return DsApiException(
-          'DeepSeek 服务异常（500），请稍后重试',
-          statusCode: statusCode,
-          body: body,
-        );
-      case 503:
-        return DsApiException(
-          'DeepSeek 服务繁忙（503），请稍后重试',
-          statusCode: statusCode,
-          body: body,
-        );
-      default:
-        return DsApiException(
-          '请求失败（$statusCode）：$detail',
-          statusCode: statusCode,
-          body: body,
-        );
-    }
-  }
-
-  /// 尽量从响应体里挖出接口给的错误说明。
-  static String _errorMessage(String body) {
-    try {
-      final dynamic json = jsonDecode(body);
-      if (json is Map) {
-        final dynamic error = json['error'];
-        if (error is Map) {
-          final dynamic message = error['message'];
-          if (message is String && message.isNotEmpty) return message;
-        }
-        final dynamic message = json['message'];
-        if (message is String && message.isNotEmpty) return message;
-      }
-    } catch (_) {
-      // 不是 JSON 就直接截断原文
-    }
-
-    final String text = body.trim();
-    if (text.isEmpty) return '（响应体为空）';
-    return text.length > 200 ? '${text.substring(0, 200)}…' : text;
-  }
+  /// 实现在 [DsTransport]，这里保留入口方便旧调用方。
+  static DsStreamDelta? sseDelta(String line) => DsTransport.sseDelta(line);
 }

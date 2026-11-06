@@ -1,7 +1,7 @@
 name: tbank
 description: "本地题库刷题 App：扫描 JSON 题库、逐题作答、记录并回写每题统计。"
 publish_to: 'none'
-version: 0.2.2+12
+version: 0.2.7+17
 
 environment:
   sdk: ^3.13.5
@@ -25,11 +25,13 @@ dev_dependencies:
   flutter_lints: ^6.0.0
   # 生成启动图标，命令：dart run flutter_launcher_icons
   flutter_launcher_icons: ^0.14.4
+  # 测试里把 App 私有目录固定到临时文件夹
+  path_provider_platform_interface: ^2.1.0
 
 flutter:
   uses-material-design: true
-  # 随包发布的资源。注意 home_bg 里有单张 23 MB 的图，
-  # 这 40 多 MB 会直接算进安装包体积，瘦身时优先处理这里
+  # 随包发布的资源。home_bg 的背景图已压缩成 WebP（约 2.8 MB），
+  # 以后加图也建议先压缩成 WebP 再放进来
   assets:
     - assets/images/home_bg/ # 首页随机背景
     - assets/texts/ # 首页语录卡的文案（quotes.txt）

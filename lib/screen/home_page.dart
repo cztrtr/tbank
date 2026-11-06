@@ -145,7 +145,7 @@ class _HomePageState extends State<HomePage> {
       body: Stack(
         fit: StackFit.expand,
         children: <Widget>[
-          _buildBackground(),
+          _buildBackground(context),
           // 让文字在复杂背景上仍然可读
           Container(color: Colors.black.withValues(alpha: 0.25)),
           SafeArea(
@@ -176,7 +176,7 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _buildBackground() {
+  Widget _buildBackground(BuildContext context) {
     final asset = _backgroundAsset;
 
     if (asset == null) {
@@ -187,6 +187,12 @@ class _HomePageState extends State<HomePage> {
       asset,
       fit: BoxFit.cover, // 等比铺满，裁掉多余部分，不拉伸
       alignment: Alignment.center,
+      // 背景原图很大（单张 20+ MB），按屏幕物理像素宽度解码，
+      // 避免整张原图按原始分辨率解码进内存
+      cacheWidth:
+          (MediaQuery.of(context).size.width *
+                  MediaQuery.of(context).devicePixelRatio)
+              .round(),
     );
   }
 
@@ -240,15 +246,16 @@ class _HomePageState extends State<HomePage> {
                                 AnimatedSwitcher(
                                   duration: const Duration(milliseconds: 260),
                                   transitionBuilder: (child, animation) {
-                                    final scale = Tween<double>(
-                                      begin: 0.92,
-                                      end: 1,
-                                    ).animate(
-                                      CurvedAnimation(
-                                        parent: animation,
-                                        curve: Curves.easeOutCubic,
-                                      ),
-                                    );
+                                    final scale =
+                                        Tween<double>(
+                                          begin: 0.92,
+                                          end: 1,
+                                        ).animate(
+                                          CurvedAnimation(
+                                            parent: animation,
+                                            curve: Curves.easeOutCubic,
+                                          ),
+                                        );
                                     return FadeTransition(
                                       opacity: animation,
                                       child: ScaleTransition(
@@ -265,8 +272,8 @@ class _HomePageState extends State<HomePage> {
                                       fontSize: 30,
                                       fontWeight: FontWeight.w800,
                                       letterSpacing: 2,
-                                      color: (_checkInDone ||
-                                              _alreadyCheckedToday)
+                                      color:
+                                          (_checkInDone || _alreadyCheckedToday)
                                           ? colorScheme.primary
                                           : colorScheme.onSurface,
                                     ),
@@ -290,9 +297,7 @@ class _HomePageState extends State<HomePage> {
                                   },
                                   child: _checkInDone
                                       ? const SizedBox(
-                                          key: ValueKey<String>(
-                                            'count-hidden',
-                                          ),
+                                          key: ValueKey<String>('count-hidden'),
                                         )
                                       : ValueListenableBuilder<int>(
                                           key: const ValueKey<String>(

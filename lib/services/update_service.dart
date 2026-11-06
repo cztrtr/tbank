@@ -94,14 +94,22 @@ class UpdateService {
 
       final IOSink sink = file.openWrite();
       int received = 0;
+      // 进度回调节流：UI 侧每个回调都会 setState，100 MB 的文件按
+      // chunk 回调会有几千次；这里每 200 ms 才通知一次，
+      // 流结束时无论如何补发一次最终进度。
+      final Stopwatch throttle = Stopwatch()..start();
       try {
         await for (final List<int> chunk in response.stream.timeout(
           const Duration(minutes: 2),
         )) {
           sink.add(chunk);
           received += chunk.length;
-          onProgress?.call(received, total);
+          if (onProgress != null && throttle.elapsedMilliseconds >= 200) {
+            throttle.reset();
+            onProgress(received, total);
+          }
         }
+        onProgress?.call(received, total);
       } finally {
         await sink.close();
       }

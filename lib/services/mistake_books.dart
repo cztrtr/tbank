@@ -70,11 +70,25 @@ class MistakeBookInfo {
   /// 避免和用户自己的同名题库、或其它组的同序号本子撞车；
   /// 源文件始终是 `path`，配图目录就是本子所在文件夹（`path` 的父目录）。
   QuestionBankFile toBankFile(String directoryPath) => QuestionBankFile(
-    name: '错题本-${groupName.isEmpty ? '' : '$groupName-'}$name.json',
+    name: _workingCopyName,
     uri: path,
     directoryRef: directoryPath,
     directoryName: groupName.isEmpty ? '错题本' : '错题本·$groupName',
   );
+
+  /// 工作副本的文件名。
+  ///
+  /// 分组名来自题库文件夹名：Android 上 SAF 的显示名可能带多级路径
+  /// （例如 `tbankQuestion/医用物理学`）。把它原样拼进文件名，
+  /// `docs/错题本-tbankQuestion/医用物理学-Alpha.json` 就会被当成
+  /// 两级目录，父目录不存在，练习页读工作副本时报
+  /// `No such file or directory`。这里统一把路径分隔符和 Windows 上的
+  /// 非法字符替换掉，保证工作副本永远落在 Documents 目录的第一层。
+  String get _workingCopyName {
+    final String prefix = groupName.isEmpty ? '' : '$groupName-';
+    final String raw = '错题本-$prefix$name.json';
+    return raw.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+  }
 }
 
 /// 错题本的读取、收集与统计。
@@ -238,13 +252,33 @@ class MistakeBooks {
     return books;
   }
 
+  /// 正在进行的收集任务：并发调用共享同一次，避免重复收录。
+  static Future<int>? _collectInFlight;
+
   /// 扫描所有题库，把答错过的题收进错题本，返回本次新增的题目数。
   ///
   /// 按用户添加的题库文件夹分组：同一文件夹下的错题收进
   /// `mistakes/<文件夹名>/`，各组的本子独立按 25 题一本、Alpha…Omega 命名。
   /// 收录前先把各题库里的题目 id 迁移成稳定随机 id（见 [_migrateQuestionIds]），
   /// 之后按稳定 id 全局去重：文件挪位置、换设备都不会导致重复收集。
-  static Future<int> collectFromBanks() async {
+  static Future<int> collectFromBanks() {
+    final Future<int>? existing = _collectInFlight;
+    if (existing != null) return existing;
+
+    final Future<int> future = _collectFromBanksInner();
+    _collectInFlight = future;
+    future.then<void>(
+      (int _) {
+        if (identical(_collectInFlight, future)) _collectInFlight = null;
+      },
+      onError: (Object error, StackTrace stack) {
+        if (identical(_collectInFlight, future)) _collectInFlight = null;
+      },
+    );
+    return future;
+  }
+
+  static Future<int> _collectFromBanksInner() async {
     final Directory root = await directory();
 
     // 1. 读出现有本子：按分组归类，并收集全局 origin
@@ -287,6 +321,20 @@ class MistakeBooks {
     for (final ({String name, String path}) topic
         in await AiQuestionGenerator.listTopicDirectories()) {
       sourceDirs.add((ref: topic.path, group: topic.name));
+    }
+    // App 内置的 AI 题库还可能有二级目录（拍书出题可指定「一级/二级」）。
+    // listBankFiles 会递归两级，用它的父目录补进扫描来源，
+    // 分组名与 ai_generate_page 一致，都是「主题/子主题」。
+    for (final QuestionBankFile bankFile
+        in await AiQuestionGenerator.listBankFiles()) {
+      final String group = bankFile.directoryName ?? '';
+      final bool exists = sourceDirs.any(
+        (({String ref, String group}) s) =>
+            s.ref == bankFile.directoryRef && s.group == group,
+      );
+      if (!exists) {
+        sourceDirs.add((ref: bankFile.directoryRef, group: group));
+      }
     }
 
     for (final ({String ref, String group}) source in sourceDirs) {
@@ -441,6 +489,7 @@ class MistakeBooks {
       for (final _BookData book in groupBooks) {
         while (book.questions.length < perBook && remaining.isNotEmpty) {
           book.questions.add(remaining.removeAt(0));
+          book.dirty = true;
         }
         if (remaining.isEmpty) break;
       }
@@ -461,6 +510,7 @@ class MistakeBooks {
             file: File('${groupDir.path}${Platform.pathSeparator}$name.json'),
             name: name,
             questions: slice,
+            dirty: true,
           ),
         );
       }
@@ -470,10 +520,12 @@ class MistakeBooks {
 
     if (added == 0 && !booksChanged) return 0;
 
-    // 6. 写回所有本子：有新错题、或 origin 完成了迁移，都需要落盘
+    // 6. 只写有改动的本子：没收到新题、也没迁移 origin 的本子不重复落盘
     for (final List<_BookData> groupBooks in booksByGroup.values) {
       for (final _BookData book in groupBooks) {
+        if (!book.dirty) continue;
         await _writeBook(book);
+        book.dirty = false;
       }
     }
     return added;
@@ -491,7 +543,25 @@ class MistakeBooks {
   ///
   /// [migrations] 输出旧 origin → 新 origin 的映射：
   /// 键 `<文件引用>#<旧 id>`，值 `<新稳定 id>`，用于迁移老错题本记录。
+  /// 迁移队列：启动迁移与错题本收集可能同时触发，串行化避免同一文件被并发改写。
+  static Future<void> _migrationQueue = Future<void>.value();
+
   static Future<bool> _migrateQuestionIds(
+    QuestionBankFile bankFile,
+    Map<dynamic, dynamic> decoded,
+    Map<String, String> migrations,
+  ) {
+    final Future<bool> result = _migrationQueue.then(
+      (_) => _migrateQuestionIdsInner(bankFile, decoded, migrations),
+    );
+    _migrationQueue = result.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    return result;
+  }
+
+  static Future<bool> _migrateQuestionIdsInner(
     QuestionBankFile bankFile,
     Map<dynamic, dynamic> decoded,
     Map<String, String> migrations,
@@ -558,6 +628,7 @@ class MistakeBooks {
         final String? migrated = migrations[origin];
         if (migrated == null || migrated == origin) continue;
         question['origin'] = migrated;
+        book.dirty = true;
         booksChanged = true;
       }
     }
@@ -630,22 +701,73 @@ class MistakeBooks {
     }
   }
 
-  /// 启动时自动迁移所有已添加目录下的题库 id（幂等）。
+  /// 启动迁移只跑一次的标记文件，放在 App Support 目录根下。
+  static const String _migrationMarkerName = 'id_migration_v1.done';
+
+  /// 启动迁移的共享 Future：并发调用只跑一遍。
+  static Future<void>? _startupMigration;
+
+  /// 等启动迁移结束（练习页打开题库前调用）。
+  ///
+  /// 首帧后迁移和用户第一次点开题库可能同时发生；迁移会改写题库文件，
+  /// 等它跑完再读可以避免读到写了一半的 JSON。没触发过迁移时立即返回。
+  static Future<void> waitForStartupMigration() {
+    return _startupMigration ?? Future<void>.value();
+  }
+
+  /// 启动时迁移所有已添加目录下的题库 id（幂等）。
   ///
   /// 覆盖两类来源：`config.json` 里添加的目录，以及 App 内置的 AI 出题目录
   /// （`Question/<主题>`），保证两边的题目 id 都是稳定随机串、错题去重一致。
-  /// 已是稳定 id 的文件不重写，因此第二次启动只会读一遍文件、几乎不产生写入。
+  ///
+  /// 由 `main()` 在首帧之后异步触发；老用户第一次升级需要读一遍所有题库文件，
+  /// 成功后写一个一次性标记，之后的启动只做一次 `exists()` 检查。
   /// 单个目录失败不影响其它目录（[migrateBankIdsInDirectory] 内部吞异常）。
-  static Future<void> migrateAllBankIds() async {
-    final List<String> dirs = List<String>.of(
-      AppConfig.questionBankDirsNotifier.value,
-    );
-    for (final String dirRef in dirs) {
-      await migrateBankIdsInDirectory(dirRef);
-    }
-    for (final ({String name, String path}) topic
-        in await AiQuestionGenerator.listTopicDirectories()) {
-      await migrateBankIdsInDirectory(topic.path);
+  static Future<void> migrateAllBankIds() {
+    return _startupMigration ??= _runStartupMigration();
+  }
+
+  /// 只给测试用：清掉共享 Future，模拟一次新的启动。
+  static void resetStartupMigrationForTest() {
+    _startupMigration = null;
+  }
+
+  static Future<void> _runStartupMigration() async {
+    try {
+      final Directory support = await getApplicationSupportDirectory();
+      final File marker = File(
+        '${support.path}${Platform.pathSeparator}$_migrationMarkerName',
+      );
+      if (await marker.exists()) return;
+
+      final List<String> dirs = List<String>.of(
+        AppConfig.questionBankDirsNotifier.value,
+      );
+      for (final String dirRef in dirs) {
+        await migrateBankIdsInDirectory(dirRef);
+      }
+
+      // App 内置的 AI 题库：覆盖一级与二级目录（拍书出题的自定义位置）。
+      final Set<String> aiDirs = <String>{};
+      try {
+        for (final QuestionBankFile bankFile
+            in await AiQuestionGenerator.listBankFiles()) {
+          aiDirs.add(bankFile.directoryRef);
+        }
+      } catch (error) {
+        debugPrint('读取 AI 题库目录失败：$error');
+      }
+      for (final String dir in aiDirs) {
+        await migrateBankIdsInDirectory(dir);
+      }
+
+      await marker.writeAsString(
+        DateTime.now().toIso8601String(),
+        flush: true,
+      );
+    } catch (error) {
+      // 读不到私有目录、标记写不进去等：下次启动再试，不影响使用
+      debugPrint('启动迁移题目 id 失败：$error');
     }
   }
 
@@ -669,7 +791,8 @@ class MistakeBooks {
       '.gif',
     };
 
-    // 1. 递归删除所有本子 JSON 与配图；deleted_origins.json 留到最后单独删
+    // 1. 递归删除所有本子 JSON、配图，以及散落在各级目录里的删除清单；
+    //    根目录的 deleted_origins.json 同样在这里一并删掉。
     final List<File> files = <File>[];
     try {
       for (final FileSystemEntity entity in dir.listSync(recursive: true)) {
@@ -682,11 +805,11 @@ class MistakeBooks {
 
     for (final File file in files) {
       final String lower = file.path.toLowerCase();
-      final bool isBookJson =
-          lower.endsWith('.json') &&
-          _baseName(file).toLowerCase() != _deletedBaseName;
+      final bool isDeletedList =
+          _baseName(file).toLowerCase() == _deletedBaseName;
+      final bool isBookJson = lower.endsWith('.json') && !isDeletedList;
       final bool isImage = imageExtensions.any(lower.endsWith);
-      if (!isBookJson && !isImage) continue;
+      if (!isBookJson && !isImage && !isDeletedList) continue;
       try {
         await file.delete();
       } catch (error) {
@@ -762,9 +885,29 @@ class MistakeBooks {
     if (await jsonFile.exists()) await jsonFile.delete();
 
     if (origins.isNotEmpty) {
-      final Set<String> deleted = await _loadDeletedOrigins(dir);
+      // 删除清单必须写在 `mistakes/` 根目录：collectFromBanks() 只从根目录读，
+      // 写到「本子所在的分组子目录」里等于没记，下次进错题本时这些题会被
+      // 重新收集回来 —— 表现就是「提示已删除，实际没删」。
+      final Directory root = await directory();
+      final Set<String> deleted = <String>{};
+      deleted.addAll(await _loadDeletedOrigins(root));
+
+      // 兼容旧版本误写在分组子目录里的清单：先并进根目录，再删掉旧文件，
+      // 这样升级前删过的题也不会复活。
+      if (dir.path != root.path) {
+        deleted.addAll(await _loadDeletedOrigins(dir));
+        final File legacy = File(
+          '${dir.path}${Platform.pathSeparator}$_deletedBaseName.json',
+        );
+        try {
+          if (await legacy.exists()) await legacy.delete();
+        } catch (error) {
+          debugPrint('清理旧的错题删除记录失败：$error');
+        }
+      }
+
       deleted.addAll(origins);
-      await _saveDeletedOrigins(dir, deleted);
+      await _saveDeletedOrigins(root, deleted);
     }
   }
 
@@ -856,8 +999,9 @@ class MistakeBooks {
       final dynamic raw = decoded['questions'];
       final List<Map<String, dynamic>> questions = raw is List
           ? raw
-                .whereType<Map>()
-                .map((Map item) => Map<String, dynamic>.from(item))
+                .whereType<Map<String, dynamic>>()
+                .map((Map<String, dynamic> item) =>
+                    Map<String, dynamic>.from(item))
                 .toList()
           : <Map<String, dynamic>>[];
 
@@ -918,13 +1062,21 @@ class MistakeBooks {
 
 /// 内存中的一本错题本。
 class _BookData {
-  _BookData({required this.file, required this.name, required this.questions});
+  _BookData({
+    required this.file,
+    required this.name,
+    required this.questions,
+    this.dirty = false,
+  });
 
   /// 本子 JSON 文件（写回时直接用，分组子文件夹里的本子也能定位）。
   final File file;
 
   final String name;
   final List<Map<String, dynamic>> questions;
+
+  /// 内容是否有改动；只有 dirty 的本子才在收集结束时写盘。
+  bool dirty;
 }
 
 /// 收集流程里的一道候选题：题库里答错过、可能被收进错题本的题。

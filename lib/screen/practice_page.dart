@@ -14,9 +14,12 @@ import '../models/question_bank_file.dart';
 import '../services/app_config.dart';
 import '../services/bank_io.dart';
 import '../services/ds_api_service.dart';
+import '../services/mistake_books.dart';
+import '../services/practice_progress.dart';
 import '../services/question_bank_storage.dart';
 import '../widgets/math_text.dart';
 import '../widgets/question_image.dart';
+import 'practice_controller.dart';
 
 /// 练习页：加载题库、逐题作答、更新统计并回写文件。
 ///
@@ -42,18 +45,22 @@ class _PracticePageState extends State<PracticePage>
   bool _loading = false; // 是否正在加载题库
   String? _error; // 加载失败的提示
 
-  int _index = 0; // 当前第几题（从 0 开始）
-  final Set<String> _selected = <String>{}; // 选择题当前选中了哪些选项
-
-  /// 本次练习已作答的题目：下标 → (是否答对, 当时的选择)。
+  /// 答题状态机：题目、当前题号、选中项、已答结果和计数都在这里。
   ///
-  /// 「上一题 / 下一题」来回切换时用它恢复判分结果，
-  /// 避免同一道题被重复提交、把统计重复加进原题库 JSON。
-  final Map<int, ({bool correct, Set<String> selected})> _answeredStates =
-      <int, ({bool correct, Set<String> selected})>{};
+  /// 页面通过下面的 getter/setter 读写，UI 代码不用关心状态存在哪；
+  /// 状态迁移（record / goTo / restart）也由它统一处理，方便单独测试。
+  PracticeController _controller = PracticeController();
+
+  int get _index => _controller.index;
+  Set<String> get _selected => _controller.selected;
+  Map<int, ({bool correct, Set<String> selected})> get _answeredStates =>
+      _controller.answeredStates;
+  bool get _answered => _controller.answered;
+  set _answered(bool value) => _controller.answered = value;
+  bool get _wasCorrect => _controller.wasCorrect;
+  set _wasCorrect(bool value) => _controller.wasCorrect = value;
+
   bool _showAnswer = false; // 填空/解释是否已展示答案
-  bool _answered = false; // 当前题是否已经判定过
-  bool _wasCorrect = false; // 当前题答得对不对
   bool _grading = false; // 是否正在等 AI 判分
   bool _aiFallback = false; // AI 判分不可用时，本题退回自判
   int? _aiScore; // 本题的 AI 得分（0-10），仅主观题用
@@ -69,10 +76,18 @@ class _PracticePageState extends State<PracticePage>
   static const int _maxAnswerImages = 4; // 一次作答最多几张图
   static const int _maxAnswerImageBytes = 5 * 1024 * 1024; // 单张 5 MB 上限
   static const int _maxTotalAnswerBytes = 10 * 1024 * 1024; // 合计 10 MB 上限
-  bool _finished = false; // 整套题是否做完
-  int _answeredCount = 0; // 本次练习一共答了多少题
-  int _correctCount = 0; // 本次练习答对了多少题
+  bool get _finished => _controller.finished;
+  set _finished(bool value) => _controller.finished = value;
+  int get _answeredCount => _controller.answeredCount;
+  int get _correctCount => _controller.correctCount;
   String? _syncMessage; // 回拷源文件的状态提示
+
+  /// 保存防抖：答题后 400ms 内连续操作只写一次工作副本。
+  ///
+  /// 切题、完成、进后台、页面销毁时都会立即 flush，不会把最后一次改动落下。
+  Timer? _persistTimer;
+  bool _persistPending = false;
+  static const Duration _persistDebounce = Duration(milliseconds: 400);
 
   int _loadToken = 0; // 加载序号，防止旧加载覆盖新加载
 
@@ -105,6 +120,8 @@ class _PracticePageState extends State<PracticePage>
     if (state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached) {
+      // 先把防抖队列里的最后一次保存落盘，再回拷
+      unawaited(_flushPersist());
       unawaited(_syncBack());
     }
   }
@@ -113,13 +130,23 @@ class _PracticePageState extends State<PracticePage>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _answerController.dispose();
-    unawaited(_syncBack()); // 页面销毁时再尝试同步一次
+    _persistTimer?.cancel();
+
+    // 页面销毁时先保存断点和待写副本，再尝试同步
+    unawaited(_saveProgress());
+    unawaited(_flushPersist());
+    unawaited(_syncBack());
     super.dispose();
   }
 
   /// 打开题库：源文件复制到文档目录，再解析进内存。
   Future<void> _loadBank(QuestionBankFile file) async {
-    // 切换题库前，先把上一个题库的改动同步回去，避免丢数据
+    // 切换题库前，先把上一个题库还没落盘的改动写完，再同步回去
+    await _flushPersist();
+
+    // 首次升级的后台 id 迁移可能正在改写题库文件，等它结束再读，避免读到半截 JSON
+    await MistakeBooks.waitForStartupMigration();
+
     final previousStorage = _storage;
     if (previousStorage != null) {
       await previousStorage.syncBack();
@@ -134,12 +161,9 @@ class _PracticePageState extends State<PracticePage>
       _error = null;
       _storage = null;
       _questions = null;
-      _finished = false;
       _syncMessage = null;
-      _index = 0;
-      _answeredCount = 0;
-      _correctCount = 0;
-      _answeredStates.clear();
+      // 换题库时先换一个空状态机；加载完成后再用新题库和断点初始化
+      _controller = PracticeController();
       _resetQuestionState();
     });
 
@@ -150,11 +174,39 @@ class _PracticePageState extends State<PracticePage>
       // 页面已销毁，或又开始了新的加载：丢弃这次结果
       if (!mounted || token != _loadToken) return;
 
+      // 断点续练：题目 id 顺序完全一致才恢复，避免判分结果对错题
+      final List<String> questionIds =
+          bank.questions.map((Question question) => question.id).toList();
+      final PracticeProgress? progress =
+          await PracticeProgress.load(file, questionIds);
+
+      if (!mounted || token != _loadToken) return;
+
       setState(() {
         _storage = storage;
         _questions = bank;
         _loading = false;
+        // 上次没回拷成功时，完成页也能看到提示
+        _syncMessage = storage.pendingSyncWarning;
+        // 用断点恢复本次练习；没有断点就从头开始
+        _controller.loadBank(bank, progress);
       });
+
+      final String? warning = storage.pendingSyncWarning;
+      final List<String> notices = <String>[
+        ?warning,
+        if (progress != null) '已恢复上次练习进度（第 ${progress.index + 1} 题）',
+      ];
+      final String? notice = notices.isEmpty ? null : notices.join('\n');
+
+      if (notice != null) {
+        // 答题页把提示显示成 SnackBar，避免用户以为记录丢了
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          ScaffoldMessenger.maybeOf(context)
+              ?.showSnackBar(SnackBar(content: Text(notice)));
+        });
+      }
     } catch (error) {
       if (!mounted || token != _loadToken) return;
       setState(() {
@@ -200,19 +252,13 @@ class _PracticePageState extends State<PracticePage>
     }
 
     setState(() {
-      _answered = true;
-      _wasCorrect = correct;
-      _answeredCount += 1;
-      if (correct) _correctCount += 1;
-      // 记住这题的判分结果，供「上一题」返回时恢复
-      _answeredStates[_index] = (
-        correct: correct,
-        selected: Set<String>.of(_selected),
-      );
+      // 状态机记录判分结果，供「上一题」恢复和断点续练使用
+      _controller.record(correct);
     });
 
-    // 每答完一题就写一次文档目录下的副本，不做防抖
-    unawaited(_persist());
+    // 每答完一题只排队一次防抖保存，不再每题整份写盘
+    _schedulePersist();
+    unawaited(_saveProgress());
   }
 
   /// 把主观题作答交给 AI 判分：得分 >= 6 判为答对。
@@ -374,7 +420,8 @@ class _PracticePageState extends State<PracticePage>
         .showSnackBar(SnackBar(content: Text(message)));
   }
 
-  /// 请求 AI 解析当前选择题：把题干、选项、正确答案（有图则带图）发给模型。
+  /// 请求 AI 解析当前题目：把题干、选项（主观题为空）、正确答案，
+  /// 以及主观题的作答文字/作答图片（有图则带图）发给模型。
   ///
   /// 结果存在页面最下方的「AI 解析」框里；失败时在同一个框里显示原因并可重试。
   Future<void> _requestAiAnalysis(Question question) async {
@@ -406,7 +453,12 @@ class _PracticePageState extends State<PracticePage>
             .map((QuestionOption option) => '${option.key}. ${option.text}')
             .join('\n'),
         correctAnswer: _answerText(question),
+        // 主观题把作答也带上，AI 才能指出错在哪；判分后输入区收起但内容还在
+        userAnswer: question.isFillBlank ? _answerController.text : null,
         imageBytes: imageBytes,
+        answerImages: question.isFillBlank
+            ? _answerImages
+            : const <Uint8List>[],
       );
 
       if (!mounted) return;
@@ -417,6 +469,25 @@ class _PracticePageState extends State<PracticePage>
     } finally {
       if (mounted) setState(() => _aiAnalysisLoading = false);
     }
+  }
+
+  /// 安排一次防抖保存；已有待保存任务时只重置计时器。
+  void _schedulePersist() {
+    _persistPending = true;
+    _persistTimer?.cancel();
+    _persistTimer = Timer(_persistDebounce, () {
+      _persistTimer = null;
+      unawaited(_flushPersist());
+    });
+  }
+
+  /// 立即把待保存内容写进工作副本；没有待保存任务时直接返回。
+  Future<void> _flushPersist() async {
+    _persistTimer?.cancel();
+    _persistTimer = null;
+    if (!_persistPending) return;
+    _persistPending = false;
+    await _persist();
   }
 
   /// 把当前题库写回文档目录下的工作副本。
@@ -454,6 +525,29 @@ class _PracticePageState extends State<PracticePage>
     }
   }
 
+  /// 保存断点：题目 id 顺序、当前题号、本次计数和已答结果。
+  ///
+  /// 整套做完后由调用方清除；题库还没加载完时什么都不做。
+  Future<void> _saveProgress() async {
+    final QuestionBankFile? file = widget.bank;
+    final QuestionBank? bank = _questions;
+    if (file == null || bank == null || _finished) return;
+
+    await PracticeProgress.save(
+      file,
+      PracticeProgress(
+        index: _index,
+        answeredCount: _answeredCount,
+        correctCount: _correctCount,
+        answers: Map<int, ({bool correct, Set<String> selected})>.of(
+          _answeredStates,
+        ),
+        questionIds:
+            bank.questions.map((Question question) => question.id).toList(),
+      ),
+    );
+  }
+
   /// 选择题提交：选中的集合必须和正确答案完全一致。
   void _submitChoice() {
     final bank = _questions;
@@ -474,6 +568,9 @@ class _PracticePageState extends State<PracticePage>
 
     if (_index + 1 >= bank.questions.length) {
       setState(() => _finished = true);
+      // 整套做完：删掉断点，下次进入从头开始
+      final QuestionBankFile? file = widget.bank;
+      if (file != null) unawaited(PracticeProgress.clear(file));
       unawaited(_finishAndSync());
       return;
     }
@@ -495,18 +592,16 @@ class _PracticePageState extends State<PracticePage>
     final answered = _answeredStates[index];
 
     setState(() {
-      _index = index;
-      _resetQuestionState();
+      _resetQuestionState(); // 清掉 AI 解析、输入框等临时状态
+      _controller.goTo(index);
 
       if (answered != null) {
-        _answered = true;
-        _wasCorrect = answered.correct;
         _showAnswer = true; // 填空/解释：直接显示参考答案
-        _selected
-          ..clear()
-          ..addAll(answered.selected);
       }
     });
+
+    // 切题即记下断点，下次打开能停在这一题
+    unawaited(_saveProgress());
   }
 
   /// 整套题做完后的回拷，并把结果显示在完成页。
@@ -514,6 +609,8 @@ class _PracticePageState extends State<PracticePage>
     if (!mounted) return;
     setState(() => _syncMessage = '正在同步到题库文件夹…');
 
+    // 先落盘最后一次答题，再回拷；storage 的串行队列保证先后顺序
+    await _flushPersist();
     final ok = await _syncBack();
     if (!mounted) return;
 
@@ -524,13 +621,12 @@ class _PracticePageState extends State<PracticePage>
 
   /// 重新从第一题开始；统计不重置，因为题目统计是累计值。
   void _restart() {
+    final QuestionBankFile? file = widget.bank;
+    if (file != null) unawaited(PracticeProgress.clear(file));
+
     setState(() {
-      _index = 0;
-      _finished = false;
-      _answeredCount = 0;
-      _correctCount = 0;
+      _controller.restart();
       _syncMessage = null;
-      _answeredStates.clear();
       _resetQuestionState();
     });
   }
@@ -647,43 +743,24 @@ class _PracticePageState extends State<PracticePage>
         ],
 
         if (_answered) ...<Widget>[
-          // 已判分：左边「AI 解析」（仅选择题），右边「下一题」
+          // 已判分：底部「下一题」占满一行
           const SizedBox(height: 16),
-          Row(
-            children: <Widget>[
-              if (!question.isFillBlank) ...<Widget>[
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: _aiAnalysisLoading
-                        ? null
-                        : () => _requestAiAnalysis(question),
-                    child: _aiAnalysisLoading
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Text('AI 解析'),
-                  ),
-                ),
-                const SizedBox(width: 12),
-              ],
-              Expanded(
-                child: FilledButton(
-                  onPressed: _next,
-                  child: Text(_index + 1 >= total ? '完成练习' : '下一题'),
-                ),
-              ),
-            ],
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton(
+              onPressed: _next,
+              child: Text(_index + 1 >= total ? '完成练习' : '下一题'),
+            ),
           ),
+          // AI 解析按钮紧贴判分结果上方，保证一定在视口里
+          const SizedBox(height: 12),
+          ..._buildAiAnalysisEntry(question),
           const SizedBox(height: 16),
           _buildResult(question),
           if (question.hasAnalysis) ...<Widget>[
             const SizedBox(height: 12),
             _buildAnalysis(question),
           ],
-          // AI 解析结果固定在页面最下方
-          if (!question.isFillBlank) ..._buildAiAnalysis(question),
         ] else if (!question.isFillBlank) ...<Widget>[
           // 未判分的选择题：左边「上一题」，右边「提交答案」
           const SizedBox(height: 16),
@@ -704,6 +781,12 @@ class _PracticePageState extends State<PracticePage>
               ),
             ],
           ),
+        ],
+
+        // 主观题「展示答案」之后就能问 AI，不必先自判对错
+        if (!_answered && question.isFillBlank && _showAnswer) ...<Widget>[
+          const SizedBox(height: 12),
+          ..._buildAiAnalysisEntry(question),
         ],
       ],
     );
@@ -1013,7 +1096,32 @@ class _PracticePageState extends State<PracticePage>
     );
   }
 
-  /// AI 解析区域：只有点过「AI 解析」后才出现，固定排在页面最下方。
+  /// 「AI 解析」按钮 + 解析结果框。
+  ///
+  /// 按钮单独抽出来，方便放在判分结果正上方（长解析不会把它顶出屏幕）。
+  List<Widget> _buildAiAnalysisEntry(Question question) {
+    return <Widget>[
+      SizedBox(
+        width: double.infinity,
+        child: OutlinedButton.icon(
+          onPressed: _aiAnalysisLoading
+              ? null
+              : () => _requestAiAnalysis(question),
+          icon: _aiAnalysisLoading
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.auto_awesome, size: 18),
+          label: Text(_aiAnalysisLoading ? '正在生成解析…' : 'AI 解析'),
+        ),
+      ),
+      ..._buildAiAnalysis(question),
+    ];
+  }
+
+  /// AI 解析区域：只有点过「AI 解析」后才出现，紧跟按钮下方。
   ///
   /// 三种状态共用一个外框：加载中、请求失败（可重试）、拿到解析文本。
   List<Widget> _buildAiAnalysis(Question question) {

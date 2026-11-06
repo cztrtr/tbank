@@ -15,6 +15,7 @@
 - 底部导航：`首页` / `管理` / `练习` / `我的`
 - 首页
   - 每次启动从 `assets/images/home_bg/` 随机选择一张背景图，使用 `BoxFit.cover` 等比铺满
+    （图片已压缩成 WebP，并按屏幕宽度解码，控制内存占用）
   - 顶部居中的圆角正方形打卡卡片（半透明毛玻璃）：显示「打卡」、累计天数、日期
   - 点击卡片后文案变为 `HELLO`、天数隐藏、日期放大，1 秒后卡片淡出离场；同时按连续打卡规则更新 `clockOnNum` 和 `lastClockOnDate`
   - 如果今天已经打过卡，卡片显示「已打卡」、保留天数，但不可再次点击；**只在本次启动展示 3 秒，随后自动淡出并从布局中移除**（语录卡随之上移）
@@ -22,30 +23,44 @@
   - 语录文件的格式：一行一句，空行忽略，`#` 开头的行是注释
 - 题库管理
   - 右上角 `+` 调起系统目录选择器
-  - 扫描所选目录下的 `.json` 文件，按目录分组展示：文件夹名作为分组标题，题库缩进列在下面
+  - 多目录**并发扫描**；右上角搜索按钮可按题库名称筛选
+  - 扫描所选目录下的 `.json` 文件，按「父文件夹 → 子文件夹 → 题库」三级展示：
+    父文件夹取每个目录引用的上一层（`BankIo.parentOf`），同一父目录下添加的多个子目录归到一组；
+    解析不出父级时退化成两级，不重复显示标题
+  - App 内置 AI 题库支持两级目录（`Question/<主题>/<子主题>`），与用户目录一起按同一规则展示
   - 点击文件进入练习
-  - 文件夹标题右侧的删除按钮只移除 `config.json` 里的目录记录，不会删除目录或题目文件
+  - 子文件夹标题右侧的删除按钮只移除 `config.json` 里的目录记录，不会删除目录或题目文件
 - 练习
   - 单选 `single_choice`
   - 多选 `multiple_choice`
   - 判断 `true_false`
   - 填空/解释 `fill_blank`（可输入文字或拍照/选择作答图片；配置了 DeepSeek 密钥时由 AI 判 0-10 分，低于 6 分判错；未配置时退回「展示答案 + 自判」）
-  - 选择题答完后左侧「AI 解析」、右侧「下一题」；AI 解析结果显示在页面最下方的独立框里
+  - 所有题型答完后都有左侧「AI 解析」、右侧「下一题」；选择题讲正确答案与其它选项，主观题给解题步骤并点评学生作答（文字 + 作答图片）；解析结果显示在页面最下方的独立框里
   - 题目上方显示该题累计「已作答 / 答错」次数
   - 题目配图：JSON 的 `image` 非空时，从**题库 JSON 所在目录**加载同名图片；选择题显示在选项下方，填空/解释题紧跟题干。文件缺失或无法解码时显示占位框并标出文件名
+  - 断点续练：每次答题/切题后把当前题号、已答结果和本次计数写进 App 私有目录的 `progress/`；
+    退出或重启后重新打开同一题库会恢复进度，整套做完或题库题目增删/换序后自动放弃旧进度
 - 错题本
-  - 「我的 → 错题本」进入二级页面，打开时先扫描所有题库目录，把 `stats.wrongCount > 0` 的题复制到 App 私有目录的 `mistakes/`
+  - 「我的 → 错题本」进入二级页面：先列出已有本子（秒开），再在后台扫描所有题库目录，
+    把 `stats.wrongCount > 0` 的题复制到 App 私有目录的 `mistakes/`；完成后刷新列表并提示新增数量
   - **按题库文件夹分组**：同一 App 添加目录下的错题收进 `mistakes/<文件夹名>/`（如 `mistakes/组织学/`），不同文件夹互不混合；老版本直接放在根目录的本子显示为「未分组」
   - 每组 25 题一本，命名顺序：24 个希腊字母（Alpha…Omega）→ 加序号再来一轮（Alpha 2、Beta 2……），共 24 个一轮；不再使用汉字命名
   - 题目 `id` 重编号为 `C001`…（组内独立编号），并写入 `origin`（App 生成的稳定随机题目 id，`q_` 前缀）用于去重、`mistakeScore`（初始 3）
   - 配图复制到本子所在分组目录并按新编号重命名，错题本不依赖原题库目录
   - 作答时 `mistakeScore` 答对 -1、答错 +1，减到 0 视为完成；**题目保留不移除**，列表显示「已完成 / 未完成」
+  - 列表按「父文件夹 → 题库子文件夹 → 错题本」三级展示：分组名仍是题库文件夹名，
+    父级由当前题库目录配置反查 `BankIo.parentOf` 得到（目录被移除/改名的分组退化成自己的分组名）
   - 列表里可以删除整本（连同配图）；被删题目的 `origin` 写入 `mistakes/deleted_origins.json`，之后不再自动收集
   - 错题本内作答不回写原题库统计
 - 快速开始
   - 入口在「我的」页顶部，页面读取随包发布的 `assets/texts/quick_start.md` 展示
   - 内容只覆盖上手步骤（打卡/添加题目/作答/错题本/配置 DeepSeek API/AI 出题），不写技术细节
   - 渲染器只支持用到的少量 Markdown：标题、无序列表、`**粗体**`、`` `行内代码` ``
+- 学习统计
+  - 入口在「我的 → 学习统计」
+  - 扫描所有用户题库目录 + App 内置 AI 题库（含二级目录），汇总总题数、作答次数、答错次数与正确率
+  - 按题库文件夹分组显示，并列出答错次数最多的前 5 道题；顶部显示连续打卡天数
+  - 单个题库文件损坏时跳过，不影响整体统计
 - AI 出题
   - 入口在「我的 → AI 出题」，需要已配置 DeepSeek 密钥
   - 输入主题（作为文件夹名）与出题要求，勾选题型（单选/多选/判断/填空/名词解释/解答/证明），选择题目数量（5~100）
@@ -54,6 +69,19 @@
   - 题目经过校验（题型合法、选择题选项 ≥2、答案 key 在选项内、主观题有答案文本），不合法题跳过；id 全局连续重编 Q001…
   - 页面下方列出已生成题库（按主题分组），点开直接练习；答错的题同样进错题本
   - `Question/` 下的题库同时显示在「管理」页（QuestionBankPage 会额外扫描该内置目录）
+  - 出题类请求的超时放宽到 300 秒（`_generationTimeout`），判分/解析等仍用 120 秒
+- 拍书出题
+  - 入口在「我的 → 拍书出题」，拍照或从相册选 1~3 张图片（压缩到长边 1600）
+  - 图片可以是题目（模仿出同类型新题）或知识点讲解（围绕内容出题），可填写具体出题要求
+  - 保存位置可自定义：`Question/<一级目录>[/<二级目录>]/<文件名>.json`；
+    二级目录与文件名可留空，自动用「一级目录-时间戳」命名，多批时追加 `-2`、`-3`
+  - **不会覆盖已有题库**：生成前用 `AiQuestionGenerator.reserveBaseName()`
+    预留基名，目录里已有同名文件时自动改成 `<名字>-2`、`<名字>-3`…；
+    `saveBatchTo()` 落盘时还会再查一次，双保险
+  - 页面下方列出 `Question/` 里已有的全部题库（按一级 / 二级目录分组），
+    每行右侧的垃圾桶经二次确认后**彻底删除**该 `.json`（`deleteBank()`），
+    顺带清掉删空的二级 / 一级目录，`Question/` 根目录保留
+  - 保存后由管理页 / 错题本 / 统计页的 AI 题库扫描（两级）统一发现
 - AI 变式出题
   - 入口在「管理」页每个题库右侧的 ✨ 按钮，针对用户已有的 `.json` 题库
   - 读取题干/选项/答案/解析后，先调 AI 归纳**具体知识点**（`{"knowledgePoints":[...]}`），
@@ -72,8 +100,9 @@
   - Android 下载到缓存目录后，通过 FileProvider 交给系统安装器；桌面端只下载到下载目录
   - 未授予「安装未知应用」时会跳到系统授权页并提示用户重试
 - 统计与持久化
-  - 每题判分后更新内存统计，并写一次文档目录下的工作副本
-  - 整份做完、App 进入后台、页面销毁时，把工作副本回拷到题库所在文件夹
+  - 每题判分后更新内存统计，并按 400ms 防抖写一次文档目录下的工作副本
+  - 整份做完、App 进入后台、页面销毁时立即 flush 并回拷到题库所在文件夹
+  - 回拷失败时保留 `.dirty` 标记；下次打开题库先补回拷，仍失败就读副本，避免统计被旧源文件覆盖
 - 配置
   - `config.json` 保存题库目录列表、连续打卡天数、上次打卡日期和 DeepSeek API Key（base64）
   - 配置和目录变化通过 `ValueNotifier` 全局广播
@@ -83,16 +112,16 @@
 ```text
 题库文件夹里的 xxx.json
         │  QuestionBankStorage.load()
-        │  1. 复制到 getApplicationDocumentsDirectory()
+        │  1. 复制到 文档目录/banks/<来源哈希>/<文件名>（每个来源独立副本）
         ▼
-App 文档目录下的 xxx.json（工作副本）
+工作副本 + .dirty 标记（save 后出现）
         │  2. 解析
         ▼
 内存中的 QuestionBank
-        │  3. 每题判分后 QuestionStats 递增
+        │  3. 每题判分后 QuestionStats 递增；400ms 防抖写副本
         ▼
 工作副本写回（QuestionBankStorage.save）
-        │  4. 完成 / 进后台 / 页面销毁 / 换题库
+        │  4. 完成 / 进后台 / 页面销毁 / 换题库时 flush
         ▼
 回拷到题库文件夹里的原 xxx.json（syncBack）
 ```
@@ -109,10 +138,15 @@ lib/
 │   └── question_bank_file.dart     # 题库文件（名称 + 引用 + 所属目录）
 ├── services/
 │   ├── app_config.dart             # config.json 读写、全局 notifier
-│   ├── question_bank_storage.dart  # 读取/保存/回拷题库文件
+│   ├── question_bank_storage.dart  # 读取/保存/回拷题库文件（按来源隔离工作副本）
 │   ├── bank_io.dart                # 存储访问统一入口（SAF / 文件路径）
+│   ├── bank_repository.dart        # 题库扫描统一入口（用户目录 + AI 题库、去重、缓存）
+│   ├── practice_progress.dart      # 断点续练：进度 JSON 的读写与清除
+│   ├── ref_hash.dart               # 题库来源的稳定哈希（工作副本 / 进度文件命名）
 │   ├── saf.dart                    # Android SAF 通道封装
-│   ├── ds_api_service.dart         # DeepSeek API 调用（判分/解析/出题）
+│   ├── ds_api_service.dart         # DeepSeek 业务层（提示词/判分/解析/出题）
+│   ├── ds_transport.dart           # DeepSeek HTTP 传输层（流式/非流式/SSE）
+│   ├── ds_api_exception.dart       # DsApiException
 │   ├── ai_question_generator.dart  # AI 出题：生成、校验、落盘到 Question/
 │   ├── variant_question_generator.dart # AI 变式出题：读题库→归纳知识点→按希腊字母命名写回同目录
 │   ├── update_service.dart         # 应用更新：下载 APK + 调起系统安装器
@@ -121,18 +155,24 @@ lib/
 │   ├── main_screen.dart            # 底部导航 + IndexedStack
 │   ├── home_page.dart              # 随机背景 + 打卡卡片
 │   ├── question_bank_page.dart     # 目录选择、扫描、题库列表
-│   ├── practice_page.dart          # 练习界面与答题逻辑
-│   ├── mistake_books_page.dart     # 错题本二级页面
+│   ├── practice_controller.dart    # 练习状态机（题号/选择/判分/计数/断点）
+│   ├── practice_page.dart          # 练习界面、AI 交互与文件同步
+│   ├── mistake_books_page.dart     # 错题本二级页面（先展示再后台收集）
 │   ├── ai_generate_page.dart       # AI 出题页（表单 + 已生成题库列表）
+│   ├── book_ai_generate_page.dart  # 拍书出题页（拍照/相册 → 出题 → 自定义保存位置）
 │   ├── variant_generate_page.dart    # AI 变式出题页（知识点归纳 + 分批进度）
-│   ├── me_page.dart                # 个人中心，提供快速开始/错题本/AI 出题/设置入口
+│   ├── me_page.dart                # 个人中心，提供快速开始/统计/错题本/AI 出题/拍书出题/设置入口
 │   ├── quick_start_page.dart        # 快速开始：读取 assets/texts/quick_start.md 展示
+│   ├── stats_page.dart              # 学习统计：答题量、正确率、错题排行
 │   └── settings_page.dart          # 设置页
 └── widgets/
     ├── quote_card.dart             # 首页语录卡：随机一句、点击换句
     ├── question_image.dart         # 题目配图：加载 + 缺失/损坏占位
     └── math_text.dart              # LaTeX 公式混合文本渲染（题干/选项/解析）
 ```
+
+CI 配置在 `.github/workflows/flutter.yml`：push / PR 时跑 `flutter analyze` 和
+`flutter test --coverage`。
 
 ## 快速开始
 
@@ -152,14 +192,24 @@ flutter run
 打包 APK：
 
 ```bash
+# 通用包：一个 APK 含全部 ABI（约 60 MB）
 flutter build apk --release
+
+# 推荐发布：按 ABI 拆分，单个包约 20-25 MB
+flutter build apk --release --split-per-abi
 ```
 
 输出：
 
 ```text
 build/app/outputs/flutter-apk/app-release.apk
+build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
+build/app/outputs/flutter-apk/app-x86_64-release.apk
 ```
+
+给真机分发时优先用 `app-arm64-v8a-release.apk`；模拟器或老设备再按架构选。
+`--split-per-abi` 产物不能互相覆盖安装（签名相同但包名相同、ABI 不同），发布时保持同一架构更新。
 
 签名由 `android/app/build.gradle.kts` 控制：存在 `android/key.properties` 时使用正式签名，
 不存在时自动退回 debug 签名（方便本地直接 `flutter run --release`）。
@@ -344,9 +394,31 @@ build/windows/x64/runner/Release/
 | 成员 | 说明 |
 | --- | --- |
 | `QuestionBankStorage(file:)` | 绑定一个题库文件（`QuestionBankFile`） |
-| `load()` | 复制源文件到文档目录，读取并解析成 `QuestionBank` |
-| `save(QuestionBank)` | 把整份题库写回工作副本，内部串行队列 |
-| `syncBack()` | 把工作副本回拷到源文件，返回是否成功 |
+| `load()` | 复制源文件到 `文档目录/banks/<来源哈希>/`，读取并解析成 `QuestionBank`；有 `.dirty` 时先补回拷，失败则读副本 |
+| `save(QuestionBank)` | 把整份题库写回工作副本，内部串行队列；写成功后打 `.dirty` 标记 |
+| `syncBack()` | 把工作副本回拷到源文件，成功清除 `.dirty`，返回是否成功 |
+| `pendingSyncWarning` | 上次加载时发现未回拷成功的提示；没有则为 null |
+
+### BankRepository（`lib/services/bank_repository.dart`）
+
+题库扫描统一入口：并发列用户目录、合并 App 内置 AI 题库、按 uri 去重，
+默认 2 秒缓存；`listAll(refresh: true)` 强制重扫。管理页、统计页共用。
+
+### PracticeProgress（`lib/services/practice_progress.dart`）
+
+断点续练的持久化：文件在 `App Support/progress/<来源哈希>.json`。
+
+| 成员 | 说明 |
+| --- | --- |
+| `load(file, questionIds)` | 读取断点；题目 id 顺序不一致、文件损坏时返回 null |
+| `save(file, progress)` | 写入当前题号、本次计数和已答结果 |
+| `clear(file)` | 整套做完或重新开始时删除断点 |
+
+### PracticeController（`lib/screen/practice_controller.dart`）
+
+练习状态机：题目、当前题号、选中项、已答结果、本次计数。
+`record(correct)` 记录判分，`goTo(index)` 恢复某题状态，`restart()` 从头开始，
+`loadBank(bank, progress)` 换题库并按断点恢复。
 
 ### Saf（`lib/services/saf.dart`）
 
@@ -382,6 +454,8 @@ Android Storage Access Framework 的 Dart 封装，对应原生 `tbank/saf` 通�
 
 DeepSeek 对话接口（OpenAI 兼容协议）的封装，模型固定为 `deepseek-flash`。
 API Key 从 `AppConfig.dsApiKey` 读取，未配置时抛 `DsApiException`。
+HTTP 传输（非流式 / 流式 / SSE 解析 / 错误翻译）拆在 `ds_transport.dart`，
+异常类型拆在 `ds_api_exception.dart`；`DsApiService` 只保留提示词与业务解析。
 
 | 成员 | 说明 |
 | --- | --- |
@@ -391,11 +465,11 @@ API Key 从 `AppConfig.dsApiKey` 读取，未配置时抛 `DsApiException`。
 | `extractKnowledgePoints(bankName:, questionsText:)` | 通读题库摘要，归纳知识点，返回 `List<String>` |
 | `generateQuestionsFromKnowledge(topic:, knowledgePoints:, types:, count:)` | 围绕知识点生成变式题，返回原始 JSON 文本 |
 | `parseKnowledgePoints(raw)` | 解析知识点 JSON，容忍代码围栏与多余文字 |
-| `sseDelta(line)` | 解析一行 SSE，区分正文 `content` 与思考过程 `reasoning_content` |
+| `sseDelta(line)` | 转发到 `DsTransport.sseDelta`，解析一行 SSE，区分正文 `content` 与思考过程 `reasoning_content` |
 
 说明：
 
-- 传了 `imageBytes` 时按「文本 + `image_url` 内容块」发送（`_withOptionalImage`），MIME 按文件头判断
+- 传了 `imageBytes` 时按「文本 + `image_url` 内容块」发送（`_withImages`），MIME 按文件头判断
 - 所有错误统一转成 `DsApiException`，带中文提示和 HTTP 状态码
 - 没有引入 `dart:io`，保持与平台无关的纯 Dart 依赖，便于复用
 
@@ -413,7 +487,7 @@ API Key 从 `AppConfig.dsApiKey` 读取，未配置时抛 `DsApiException`。
 | `directory()` | 返回 `mistakes/` 目录，不存在则创建 |
 | `list()` | 递归列出所有分组的本子（含所属组名），按「组名 + Alpha…Omega」排序 |
 | `collectFromBanks()` | 扫描所有题库，把 `wrongCount > 0` 且未收集过的题按题库文件夹分组复制进来（组内分本/编号），返回新增数 |
-| `migrateAllBankIds()` | 启动时迁移所有已添加目录下的题库 id（幂等；只读判断，已迁移的不重写） |
+| `migrateAllBankIds()` | 首帧之后异步迁移所有已添加目录下的题库 id（幂等；成功后写一次性标记，后续启动只检查标记） |
 | `migrateBankIdsInDirectory(dir)` | 添加题库目录时立即迁移该目录下所有题库的题目 id（幂等） |
 | `resetAll()` | 设置页「重置错题本」按钮调用的手动重置：删除所有错题本（JSON + 配图）并清空删除史 |
 | `deleteBook(book)` | 删除一本错题本及其配图，并把题目的 `origin` 记入删除清单 |
@@ -424,12 +498,14 @@ API Key 从 `AppConfig.dsApiKey` 读取，未配置时抛 `DsApiException`。
 （原文件回写失败时新收录仍用旧格式，去重时新旧键都查，保证不重复收集）。
 编号 `C001` 在组内独立递增（从该组已有本子的最大编号继续）。
 
-迁移时机：App 启动时（[`migrateAllBankIds`](lib/services/mistake_books.dart)）、
+迁移时机：App 首帧之后（`main()` 里 `addPostFrameCallback` 调用
+[`migrateAllBankIds`](lib/services/mistake_books.dart)）、
 添加题库目录时（[`migrateBankIdsInDirectory`](lib/services/mistake_books.dart)）与
 进入错题本页（`collectFromBanks`）各做一次，均幂等。
 除了用户添加的目录，启动与收集还会额外覆盖 App 内置的 AI 出题目录
 （`Question/<主题>`），保证两边的题目 id 与错题去重键一致。
-启动时只读一遍文件判断，已迁移的题库不会重写，因此后续启动开销很小。
+首次升级启动会读一遍所有题库文件；成功后写 `id_migration_v1.done` 标记，
+之后的启动只做一次 `exists()` 检查，不再扫描，冷启动不受题库数量影响。
 错题本重置由设置页「重置错题本」按钮手动触发
 （[`resetAll`](lib/services/mistake_books.dart)）：删除 `mistakes/` 下所有
 错题本 JSON 与配图，并删除 `mistakes/deleted_origins.json`；
@@ -446,11 +522,13 @@ API Key 从 `AppConfig.dsApiKey` 读取，未配置时抛 `DsApiException`。
 | `MainScreen._openBank(QuestionBankFile)` | 点击题库后的回调：保存选中项并切到练习 tab |
 | `QuestionBankPage(onOpenBank:)` | 扫描用户添加的目录 + 内置 AI 出题目录（`Question/`），点击文件时把 `QuestionBankFile` 交给父级；每行右侧 ✨ 进入 AI 变式出题 |
 | `PracticePage(bank:)` | 接收题库并完成加载、答题、统计、回拷 |
-| `MePage` | 个人中心，提供「快速开始」「错题本」「AI 出题」「设置」四个入口 |
+| `MePage` | 个人中心，提供「快速开始」「学习统计」「错题本」「AI 出题」「拍书出题」「设置」六个入口 |
 | `QuickStartPage` | 快速开始：读取 `assets/texts/quick_start.md` 并用简单 Markdown 排版展示 |
 | `SettingsPage` | 设置页：DeepSeek 密钥、应用更新（下载 APK）、重置错题本 |
 | `MistakeBooksPage` | 错题本二级页面：进入时收集并按题库文件夹分组列出各本 |
 | `AiGeneratePage` | AI 出题：输入主题/要求生成 25 道题保存到 `Question/`，列出已生成题库 |
+| `BookAiGeneratePage` | 拍书出题：拍照/相册识别题目或知识点，可自定义一级/二级目录与文件名 |
+| `StatsPage` | 学习统计：汇总题数、作答/答错、正确率与错题排行 |
 | `VariantGeneratePage(source:)` | AI 变式出题：读取源题库、归纳知识点、分批生成并按希腊字母递增命名写到同目录 |
 
 ### 组件（widgets）
@@ -662,23 +740,28 @@ kotlin.incremental=false
 
 ## 已知限制
 
-- **工作副本以源文件为准**：每次打开题库都会用源文件覆盖副本，若上次没成功回拷，副本里的新统计会丢失；
-- **同名文件冲突**：不同目录下的同名 `.json` 会映射到文档目录下同一个副本；
-- **强杀进程可能丢最后一次同步**：生命周期回调不保证执行，但工作副本通常是安全的；
+- **强杀进程可能丢最后一次同步**：答完最后一题后 400ms 内的写入可能来不及，但副本旁的 `.dirty` 标记会在下次打开时补回拷；补不回去时读副本，不会冲掉统计；
+- **断点续练不保存未提交的输入**：已提交题目的判分结果会恢复，主观题输入框里还没提交的文字、拍照图片不落盘；题库题目增删或换序后旧进度自动作废；
 - **同一题库练完后再点一次不会自动重开**：`didUpdateWidget` 比较的是路径，路径没变不会重新加载；可以点完成页的“再练一遍”，或给选择加一个序号；
 - **填空/解释的判分依赖 DeepSeek**：配置了 Key 时由 AI 打 0-10 分（低于 6 分判错），未配置或请求失败时退回“答对了 / 答错了”自判；AI 判分有模型波动，同一答案分数可能不完全一致；作答图片最多 4 张、单张 5 MB、合计 10 MB，Android 端会压缩到长边 1600px；
 - **只扫描目录第一层**：需要递归时把 `dir.list(followLinks: false)` 改为 `recursive: true`；
 - **删除目录记录会带走该目录下所有题库**：列表按文件展示，但删除操作移除的是整个目录记录，同一目录里的其它 `.json` 也会一起从列表消失（文件本身不删）；
-- **界面状态都在页面 State 里**：没有引入 Provider/Riverpod，跨页面共享只通过 AppConfig 的 notifier；
+- **`Question/` 里的题库在管理页删不掉**：它是 App 内置目录，没有 `config.json` 记录可移除；要彻底删除请到「拍书出题」页底部的「已生成的题库」列表操作（删除不可恢复，错题本里已收集的题目会保留）；
+- **界面状态**：练习状态收在 `PracticeController`，其余页面状态仍由各页 State 持有；没有引入 Provider/Riverpod，跨页面共享只通过 AppConfig 的 notifier（题库列表另有 `BankRepository` 缓存）；
 - **配图不会被复制**：`load()` 只复制 JSON 到文档目录，图片始终从题库所在目录读取。因此源目录被删除、改名或权限被收回后，图片会退化成「图片不存在」占位框（不影响答题）；
 - **配图高度上限 320px**：超过这个高度的图会被等比缩放到 320 以内，长截图可能看不清；改 `QuestionImage.maxHeight` 即可；
-- **assets 体积偏大**：`assets/images/home_bg/` 里有单张 23 MB 的图，全部背景合计约 48 MB，会直接计入安装包。瘦身时优先压缩或裁掉这里。
+- **assets 体积**：`assets/images/home_bg/` 的背景图已压缩为 WebP（约 2.8 MB），以后新增图片建议同样压缩后再放入。
 
 ## 开发约定
 
 - 页面里尽量使用 `Theme.of(context).colorScheme`，不要把颜色写死；
 - 异步操作之后使用 `context` 或 `setState` 前先检查 `mounted`；
 - 题库文件读写统一走 `QuestionBankStorage`，不要在页面里直接 `File` 操作；
+- 题库目录扫描统一走 `BankRepository`，不要在页面里重复列目录；
 - 配置读写统一走 `AppConfig`，不要绕过它直接改 `config.json`；
 - 每道题的统计更新统一走 `_recordAnswer`，避免重复计数；
+- 练习状态和状态迁移优先放进 `PracticeController`，页面只做渲染与 AI 交互；
+- 提交前跑 `flutter analyze` 和 `flutter test`；CI（`.github/workflows/flutter.yml`）用同样两条命令；
+- `analysis_options.yaml` 开启了 `strict-casts` / `strict-inference` / `strict-raw-types`，
+  解析 JSON 时要显式判断类型，不要依赖隐式转换；
 - 新增需要跨页面共享的状态时，优先复用 `ValueNotifier` 模式，而不是再引入一套状态管理。

@@ -2,12 +2,18 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../models/question_bank_file.dart';
+import '../services/ai_question_generator.dart';
+import '../services/app_config.dart';
+import '../services/bank_io.dart';
 import '../services/mistake_books.dart';
 import 'practice_page.dart';
 
 /// 错题本二级页面：列出 Alpha、Beta…… 各本错题本。
 ///
-/// 每次进入都会先扫一遍所有题库，把新答错的题收进来，再展示列表。
+/// 进入时先读已有本子立即展示，再在后台扫一遍所有题库收新错题；
+/// 列表按「父文件夹 → 题库子文件夹 → 错题本」三级展示，
+/// 父文件夹由当前题库目录配置反查得到（见 [_loadGroupSources]）。
 class MistakeBooksPage extends StatefulWidget {
   const MistakeBooksPage({super.key});
 
@@ -15,10 +21,28 @@ class MistakeBooksPage extends StatefulWidget {
   State<MistakeBooksPage> createState() => _MistakeBooksPageState();
 }
 
+/// 一个错题本分组的来源信息。
+class _GroupSource {
+  const _GroupSource({required this.ref, this.parentKey, this.parentLabel});
+
+  /// 源题库目录引用（桌面路径或 SAF URI）。
+  final String ref;
+
+  /// 父文件夹分组键；null 表示解析不出（例如目录已被移除）。
+  final String? parentKey;
+
+  /// 父文件夹展示名。
+  final String? parentLabel;
+}
+
 class _MistakeBooksPageState extends State<MistakeBooksPage> {
-  bool _loading = true; // 是否正在收集错题并读取列表
+  bool _loading = true; // 首次列表是否还在读
+  bool _collecting = false; // 后台收集新错题是否进行中
   String? _error; // 加载失败提示；null 表示没有错误
   List<MistakeBookInfo> _books = const <MistakeBookInfo>[]; // 已加载的各本错题本
+
+  /// 分组名 → 源题库目录；用于把「组织学」这类分组挂到父文件夹下。
+  Map<String, _GroupSource> _groupSources = const <String, _GroupSource>{};
 
   @override
   void initState() {
@@ -30,16 +54,19 @@ class _MistakeBooksPageState extends State<MistakeBooksPage> {
     setState(() {
       _loading = true;
       _error = null;
+      _collecting = false;
     });
 
+    // 先读已有本子让页面秒开；扫描题库收集新错题放到后台
     try {
-      // 先收集新的错题，再读列表
-      await MistakeBooks.collectFromBanks();
       final List<MistakeBookInfo> books = await MistakeBooks.list();
+      final Map<String, _GroupSource> sources = await _loadGroupSources();
       if (!mounted) return;
       setState(() {
         _books = books;
+        _groupSources = sources;
         _loading = false;
+        _collecting = true;
       });
     } catch (error) {
       if (!mounted) return;
@@ -47,7 +74,71 @@ class _MistakeBooksPageState extends State<MistakeBooksPage> {
         _error = '加载错题本失败：$error';
         _loading = false;
       });
+      return;
     }
+
+    try {
+      final int added = await MistakeBooks.collectFromBanks();
+      final List<MistakeBookInfo> updated = await MistakeBooks.list();
+      if (!mounted) return;
+      setState(() {
+        _books = updated;
+        _collecting = false;
+      });
+
+      if (added > 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('已收录 $added 道新错题')),
+        );
+      }
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _collecting = false);
+      debugPrint('收集错题失败：$error');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('收集新错题失败，稍后重试')),
+      );
+    }
+  }
+
+  /// 用当前题库目录配置，反查每个错题本分组的源目录和父文件夹。
+  ///
+  /// 错题本只保存了「题库文件夹名」（`mistakes/<文件夹名>/`），
+  /// 这里按同样的规则重新推导：用户添加的目录 + 内置 AI 题库目录。
+  /// 目录被移除或改名后找不到来源的分组，会退回按分组名单独显示。
+  Future<Map<String, _GroupSource>> _loadGroupSources() async {
+    final Map<String, _GroupSource> sources = <String, _GroupSource>{};
+
+    void add(String directoryRef, String groupName) {
+      if (groupName.isEmpty || sources.containsKey(groupName)) return;
+      final ({String key, String label})? parent = BankIo.parentOf(
+        directoryRef,
+      );
+      sources[groupName] = _GroupSource(
+        ref: directoryRef,
+        parentKey: parent?.key,
+        parentLabel: parent?.label,
+      );
+    }
+
+    for (final String dirRef in AppConfig.questionBankDirsNotifier.value) {
+      add(dirRef, BankIo.displayNameOf(dirRef));
+    }
+
+    try {
+      for (final ({String name, String path}) topic
+          in await AiQuestionGenerator.listTopicDirectories()) {
+        add(topic.path, topic.name);
+      }
+      for (final QuestionBankFile file
+          in await AiQuestionGenerator.listBankFiles()) {
+        add(file.directoryRef, file.directoryName ?? '');
+      }
+    } catch (error) {
+      debugPrint('读取 AI 题库目录失败：$error');
+    }
+
+    return sources;
   }
 
   /// 打开某一本开始练习，练完回来刷新完成状态。
@@ -111,7 +202,13 @@ class _MistakeBooksPageState extends State<MistakeBooksPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('错题本')),
-      body: _buildBody(),
+      body: Column(
+        children: <Widget>[
+          // 后台收集时只在顶部显示一条细进度，不挡住已加载的列表
+          if (_collecting) const LinearProgressIndicator(minHeight: 2),
+          Expanded(child: _buildBody()),
+        ],
+      ),
     );
   }
 
@@ -173,53 +270,123 @@ class _MistakeBooksPageState extends State<MistakeBooksPage> {
       );
     }
 
-    // 按题库文件夹分组显示：同一文件夹的错题本列在同一个组标题下
-    final Map<String, List<MistakeBookInfo>> groups =
-        <String, List<MistakeBookInfo>>{};
+    // 父文件夹 → 题库子文件夹 → 错题本
+    final Map<String, String> parentLabels = <String, String>{};
+    final Set<String> virtualParents = <String>{};
+    final Map<String, Map<String, List<MistakeBookInfo>>> tree =
+        <String, Map<String, List<MistakeBookInfo>>>{};
+
     for (final MistakeBookInfo book in _books) {
-      groups.putIfAbsent(book.groupName, () => <MistakeBookInfo>[]).add(book);
+      final _GroupSource? source = _groupSources[book.groupName];
+      final String parentKey;
+      final String parentLabel;
+      if (book.groupName.isEmpty) {
+        // 老版本直接放在根目录的本子：单独一组「未分组」
+        parentKey = '';
+        parentLabel = '未分组';
+      } else if (source?.parentKey != null) {
+        parentKey = source!.parentKey!;
+        parentLabel = source.parentLabel ?? book.groupName;
+      } else {
+        // 找不到源目录（目录被移除/改名）：用自己的分组名当父级
+        parentKey = 'group:${book.groupName}';
+        parentLabel = book.groupName;
+      }
+
+      // 没有真实父级时不画子文件夹标题，避免两行同名
+      if (parentKey == '' || source?.parentKey == null) {
+        virtualParents.add(parentKey);
+      }
+      parentLabels.putIfAbsent(parentKey, () => parentLabel);
+      tree
+          .putIfAbsent(parentKey, () => <String, List<MistakeBookInfo>>{})
+          .putIfAbsent(book.groupName, () => <MistakeBookInfo>[])
+          .add(book);
     }
 
     return ListView(
       padding: const EdgeInsets.symmetric(vertical: 8),
       children: <Widget>[
-        for (final MapEntry<String, List<MistakeBookInfo>> group
-            in groups.entries) ...<Widget>[
-          // 组标题：文件夹图标 + 文件夹名
+        for (final MapEntry<String, Map<String, List<MistakeBookInfo>>> parent
+            in tree.entries) ...<Widget>[
+          // 父文件夹标题
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
             child: Row(
               children: <Widget>[
                 Icon(
-                  Icons.folder_outlined,
-                  size: 18,
-                  color: colorScheme.onSurfaceVariant,
+                  Icons.folder_open_outlined,
+                  size: 20,
+                  color: colorScheme.primary,
                 ),
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(
-                    group.key.isEmpty ? '未分组' : group.key,
+                    parentLabels[parent.key]!,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: colorScheme.onSurfaceVariant,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      color: colorScheme.onSurface,
                     ),
                   ),
                 ),
               ],
             ),
           ),
-          // 组内每本错题本缩进显示
-          for (final MistakeBookInfo book in group.value)
-            Padding(
-              padding: const EdgeInsets.only(left: 12),
-              child: _buildBookTile(colorScheme, book),
-            ),
+
+          for (final MapEntry<String, List<MistakeBookInfo>> child
+              in parent.value.entries) ...<Widget>[
+            // 题库子文件夹标题（没有父级时省略）
+            if (!virtualParents.contains(parent.key))
+              Padding(
+                padding: const EdgeInsets.fromLTRB(30, 10, 16, 2),
+                child: Row(
+                  children: <Widget>[
+                    Icon(
+                      Icons.folder_outlined,
+                      size: 18,
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        _childLabelOf(child.key),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+            // 子文件夹里的各本错题本
+            for (final MistakeBookInfo book in child.value)
+              Padding(
+                padding: EdgeInsets.only(
+                  left: virtualParents.contains(parent.key) ? 12 : 44,
+                ),
+                child: _buildBookTile(colorScheme, book),
+              ),
+          ],
         ],
       ],
     );
+  }
+
+  /// 子文件夹展示名：优先用源目录的末段（AI 二级目录的分组名形如
+  /// `主题/子主题`，直接显示会有两段），找不到来源时退回分组名。
+  String _childLabelOf(String groupName) {
+    final _GroupSource? source = _groupSources[groupName];
+    if (source == null) return groupName;
+    final String name = BankIo.displayNameOf(source.ref);
+    return name.isEmpty ? groupName : name;
   }
 
   /// 单本错题本列表项：组内缩进，保持一致的本子样式。

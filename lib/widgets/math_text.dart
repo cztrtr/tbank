@@ -9,13 +9,21 @@ import 'package:flutter_math_fork/flutter_math.dart';
 ///
 /// 普通文本与行内公式混排在同一段落里；独立公式单独占一行。
 /// 公式解析失败时退化成原始 LaTeX 源码显示，不影响继续阅读。
-class MathText extends StatelessWidget {
+///
+/// 传入 [maxLines] 时（用于统计页这类行数受限的摘要），块级公式不再
+/// 单独成行，所有片段合并成一段，由 RichText 统一截断并显示省略号。
+///
+/// 切分结果按文本缓存在 State 里：练习页滚动、setState 时同一段文本
+/// 不会反复解析（长解析里公式多，重复切分开销不小）。
+class MathText extends StatefulWidget {
   const MathText(
     this.text, {
     super.key,
     this.style,
     this.textAlign = TextAlign.start,
     this.selectable = false,
+    this.maxLines,
+    this.overflow,
   });
 
   /// 原始文本，可能包含 LaTeX 公式。
@@ -30,20 +38,63 @@ class MathText extends StatelessWidget {
   /// 纯文本模式下是否使用 SelectableText（可复制）。
   final bool selectable;
 
+  /// 最多显示的行数；为 null 表示不限制。
+  ///
+  /// 设置后块级公式不再独占一行，而是和正文混排在同一段落里，
+  /// 这样行数限制与省略号可以对整段生效（统计页的题目摘要需要）。
+  final int? maxLines;
+
+  /// 超出 [maxLines] 时的截断方式；为 null 时按 [TextOverflow.clip]。
+  final TextOverflow? overflow;
+
+  @override
+  State<MathText> createState() => _MathTextState();
+}
+
+class _MathTextState extends State<MathText> {
+  String? _cachedText; // 上次解析时的原文
+  List<_Segment>? _cachedSegments; // 对应的切分结果
+
+  /// 取文本的切分结果；文本没变时直接复用缓存。
+  List<_Segment> _segmentsOf(String text) {
+    if (_cachedSegments != null && _cachedText == text) {
+      return _cachedSegments!;
+    }
+    final List<_Segment> segments = _parse(text);
+    _cachedText = text;
+    _cachedSegments = segments;
+    return segments;
+  }
+
   @override
   Widget build(BuildContext context) {
-    final TextStyle textStyle = style ?? DefaultTextStyle.of(context).style;
-    final List<_Segment> segments = _parse(text);
+    final TextStyle textStyle =
+        widget.style ?? DefaultTextStyle.of(context).style;
+    final List<_Segment> segments = _segmentsOf(widget.text);
     final bool hasMath = segments.any((_Segment s) => s.latex != null);
 
     // 没有公式：保持原来的纯文本渲染（可保留选择/复制能力）
     if (!hasMath) {
-      return selectable
-          ? SelectableText(text, style: textStyle, textAlign: textAlign)
-          : Text(text, style: textStyle, textAlign: textAlign);
+      return widget.selectable
+          ? SelectableText(
+              widget.text,
+              style: textStyle,
+              textAlign: widget.textAlign,
+              maxLines: widget.maxLines,
+            )
+          : Text(
+              widget.text,
+              style: textStyle,
+              textAlign: widget.textAlign,
+              maxLines: widget.maxLines,
+              overflow: widget.overflow,
+            );
     }
 
-    // 有公式：行内片段用 RichText 混排，独立公式单独成行
+    // 有公式：行内片段用 RichText 混排，独立公式单独成行。
+    // 限定了行数时（maxLines 非空）不做拆行，全部混排成一段，
+    // 否则 RichText 的 maxLines/ellipsis 无法跨多个子段落生效。
+    final bool singleParagraph = widget.maxLines != null;
     final List<Widget> children = <Widget>[];
     List<_Segment> inline = <_Segment>[];
 
@@ -54,7 +105,7 @@ class MathText extends StatelessWidget {
     }
 
     for (final _Segment segment in segments) {
-      if (segment.latex != null && segment.block) {
+      if (segment.latex != null && segment.block && !singleParagraph) {
         flushInline();
         children.add(
           Padding(
@@ -67,6 +118,12 @@ class MathText extends StatelessWidget {
       }
     }
     flushInline();
+
+    // 限定行数时所有片段都进了同一个段落，直接返回它，
+    // 让 RichText 自己按 maxLines 截断并画省略号。
+    if (singleParagraph && children.length == 1) {
+      return children.first;
+    }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -82,7 +139,9 @@ class MathText extends StatelessWidget {
     TextStyle textStyle,
   ) {
     return RichText(
-      textAlign: textAlign,
+      textAlign: widget.textAlign,
+      maxLines: widget.maxLines,
+      overflow: widget.overflow ?? TextOverflow.clip,
       text: TextSpan(
         style: textStyle,
         children: <InlineSpan>[

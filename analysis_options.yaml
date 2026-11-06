@@ -1,6 +1,13 @@
 include: package:flutter_lints/flutter.yaml
 
 analyzer:
+  language:
+    # 不隐式把 dynamic 强转成具体类型：JSON 解析处必须显式判断
+    strict-casts: true
+    # 推断不出泛型时要求显式写出，避免 List<dynamic> 到处扩散
+    strict-inference: true
+    # 禁止裸 Map / List，JSON 结构必须写清键值类型
+    strict-raw-types: true
   exclude:
     - build/**
     - android/**

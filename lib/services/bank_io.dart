@@ -143,25 +143,90 @@ class BankIo {
   ///
   /// SAF 例：`content://.../tree/primary%3ABooks` → `Books`
   /// 路径例：`D:\题库` → `题库`
+  ///
+  /// SAF 的 tree id 里可能带多级路径（`primary:tbankQuestion/医用物理学`），
+  /// 这里只取最后一段：展示名、错题本分组名都拿它当文件夹名用，
+  /// 带 `/` 的返回值会把“目录名”变成“子目录路径”，导致文件名非法。
   static String displayNameOf(String directoryRef) {
     if (_isSafRef(directoryRef)) {
       final String decoded = Uri.decodeComponent(directoryRef);
       final int colon = decoded.lastIndexOf(':');
       if (colon >= 0 && colon < decoded.length - 1) {
-        return decoded.substring(colon + 1);
+        return _lastPathSegment(decoded.substring(colon + 1));
       }
-      final List<String> segments = decoded
-          .split('/')
-          .where((String s) => s.isNotEmpty)
-          .toList();
-      return segments.isEmpty ? decoded : segments.last;
+      return _lastPathSegment(decoded);
     }
 
-    final List<String> parts = directoryRef
+    return _lastPathSegment(directoryRef);
+  }
+
+  /// 目录引用的「上一级文件夹」信息，供管理页按父目录分组。
+  ///
+  /// 返回分组键 [key] 与展示名 [label]；解析不出父级（存储根、相对路径、
+  /// 异常 URI）时返回 null，由调用方退化成「该目录自己就是一组」。
+  ///
+  /// - 路径例：`D:\题库\高数` → key `path:D:/题库`，label `题库`
+  /// - SAF 例：`...tree/primary%3A题库%2F高数` → key `saf:primary:题库`，
+  ///   label `题库`
+  static ({String key, String label})? parentOf(String directoryRef) {
+    if (_isSafRef(directoryRef)) return _safParentOf(directoryRef);
+    return _pathParentOf(directoryRef);
+  }
+
+  /// 桌面路径的父目录；`D:\` 这类根目录返回 null。
+  static ({String key, String label})? _pathParentOf(String ref) {
+    final String normalized = ref
+        .replaceAll('\\', '/')
+        .replaceFirst(RegExp(r'/+$'), '');
+    final int slash = normalized.lastIndexOf('/');
+    if (slash <= 0) return null;
+    final String parent = normalized.substring(0, slash);
+    final String label = _lastPathSegment(parent);
+    if (label.isEmpty) return null;
+    return (key: 'path:$parent', label: label);
+  }
+
+  /// SAF 目录的父目录。
+  ///
+  /// SAF 的 tree id 形如 `primary:tbankQuestion/大学物理`：
+  /// 冒号前是存储卷，后面是卷内路径；去掉最后一段就是父目录。
+  static ({String key, String label})? _safParentOf(String ref) {
+    final String decoded = Uri.decodeComponent(ref);
+    const String marker = '/tree/';
+    final int treeIndex = decoded.indexOf(marker);
+    if (treeIndex < 0) return null;
+
+    final String tail = decoded
+        .substring(treeIndex + marker.length)
+        .replaceFirst(RegExp(r'/+$'), '');
+    final int colon = tail.indexOf(':');
+    final String volume = colon >= 0 ? tail.substring(0, colon) : '';
+    final String path = colon >= 0 ? tail.substring(colon + 1) : tail;
+    final List<String> parts = path
+        .split('/')
+        .where((String part) => part.isNotEmpty)
+        .toList();
+
+    // 直接授权了整个存储卷：父级就是卷本身
+    if (parts.isEmpty) {
+      return (key: 'saf:$volume', label: volume.isEmpty ? '/' : volume);
+    }
+
+    parts.removeLast();
+    final String parentPath = parts.join('/');
+    final String label = parts.isEmpty
+        ? (volume.isEmpty ? '/' : volume)
+        : parts.last;
+    return (key: 'saf:$volume/$parentPath', label: label);
+  }
+
+  /// 取路径（SAF 的 `/` 或桌面的 `\`）的最后一段。
+  static String _lastPathSegment(String path) {
+    final List<String> parts = path
         .split(RegExp(r'[\\/]'))
         .where((String s) => s.isNotEmpty)
         .toList();
-    return parts.isEmpty ? directoryRef : parts.last;
+    return parts.isEmpty ? path : parts.last;
   }
 
   /// 去掉 UTF-8 BOM；带 BOM 的文本会让 jsonDecode 直接失败。

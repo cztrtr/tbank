@@ -14,8 +14,8 @@ class QuestionBank {
     return QuestionBank(
       questions: raw is List
           ? raw
-              .whereType<Map>()
-              .map((item) => Question.fromJson(item.cast<String, dynamic>()))
+              .whereType<Map<String, dynamic>>()
+              .map((item) => Question.fromJson(item))
               .toList()
           : <Question>[],
     );
@@ -136,9 +136,8 @@ class Question {
       image: json['image']?.toString().trim() ?? '',
       options: rawOptions is List
           ? rawOptions
-              .whereType<Map>()
-              .map((item) =>
-                  QuestionOption.fromJson(item.cast<String, dynamic>()))
+              .whereType<Map<String, dynamic>>()
+              .map((item) => QuestionOption.fromJson(item))
               .toList()
           : <QuestionOption>[],
       // correctAnswer 只接受数组；非数组一律视为没有答案

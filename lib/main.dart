@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'screen/main_screen.dart';
@@ -9,17 +11,20 @@ import 'services/mistake_books.dart';
 /// 顺序很重要：
 /// 1. 初始化 Flutter 绑定，之后才能使用 path_provider 等插件；
 /// 2. 等待配置加载完成，界面里才能同步读取 AppConfig；
-/// 3. 自动把已添加题库的题目 id 迁移成稳定随机 id（幂等，已迁移的跳过）；
-/// 4. 启动界面。
+/// 3. 启动界面；
+/// 4. 首帧之后再迁移历史题库的题目 id（不阻塞启动）。
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized(); // path_provider 依赖平台通道，必须先初始化绑定
   await AppConfig.init(); // 读配置：有文件就解析，没有就创建，内容进内存
 
-  // 启动时自动迁移：把已添加题库里的题目 id 换成稳定随机 id，
-  // 让错题去重与文件位置彻底解耦。幂等，已迁移过的文件不会重写。
-  await MistakeBooks.migrateAllBankIds();
-
   runApp(const MainApp()); // 配置就绪后再启动界面
+
+  // 历史题库 id 迁移：老用户第一次升级时要读一遍所有题库文件，
+  // 放在 runApp 之前会让启动白屏。迁移内部有一次性标记，
+  // 正常启动只做一次文件存在性检查；并发调用共享同一个 Future。
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    unawaited(MistakeBooks.migrateAllBankIds());
+  });
 }
 
 /// 应用根组件：配置主题和首页。

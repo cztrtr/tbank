@@ -9,8 +9,9 @@ import 'practice_page.dart';
 
 /// AI 出题页。
 ///
-/// 用户输入主题与出题要求，AI 生成 25 道题并保存到 App 私有目录的
-/// `Question/<主题>/<主题>-时间戳.json`（标准题库 JSON 格式）。
+/// 用户输入主题与出题要求，勾选题型和数量（5~100，每本最多 25 道），
+/// AI 生成练习题并按「每本最多 25 道」保存到 App 私有目录的
+/// `Question/<主题>/<主题>-时间戳-<批次>.json`（标准题库 JSON 格式）。
 /// 页面下方列出已生成的题库，点开即可练习。
 class AiGeneratePage extends StatefulWidget {
   const AiGeneratePage({super.key});
