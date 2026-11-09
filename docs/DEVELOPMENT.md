@@ -834,6 +834,7 @@ kotlin.incremental=false
 - zip 内可以根目录直接放 `manifest.json`，也可以套一层 `<id>/`；
 - 校验 id、版本、API 版本、types、zip 路径穿越、大小/文件数；
 - 同名非内置插件覆盖，内置 `standard` 拒绝覆盖和卸载；
+  但 `standard` 允许安装**更高版本** zip 做热更新，启动时不会被随包旧资源覆盖；
 - 卸载不会删除题库/错题本，打开时提示安装对应插件。
 
 ### WebView 运行时

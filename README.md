@@ -109,7 +109,7 @@ TBank 是一个用 Flutter 编写的**本地题目练习 App**，支持 Android 
 ### 插件系统
 
 - 内置 `standard` 插件处理单选、多选、判断、填空/简答，练习页由 WebView 加载 HTML/JS；
-- 设置 → 插件管理支持导入本地 `.zip`、从网络下载、卸载第三方插件；内置插件不可卸载；
+- 设置 → 插件管理支持导入本地 `.zip`、从网络下载、卸载第三方插件；内置插件不可卸载，但 standard 可用更高版本 zip 热更新；
 - 一个题库只由一个插件处理，题库根节点写 `"plugin": "coding"`，题目 `type` 使用插件声明的标识；
 - 插件可以声明题型名称、AI 出题说明、`pluginData` 的 JSON Schema/示例；
 - 插件可通过 `config.html` 提供自己的配置页，配置保存在插件目录的 `config.json`；

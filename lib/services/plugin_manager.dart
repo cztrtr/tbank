@@ -223,6 +223,24 @@ class PluginManager {
 
   static bool isValidId(String id) => _idPattern.hasMatch(id);
 
+  /// 比较点分版本号；返回 >0 表示 [a] 比 [b] 新。
+  static int compareVersions(String a, String b) {
+    List<int> parse(String value) => value
+        .split(RegExp(r'[.+-]'))
+        .map((String part) => int.tryParse(part) ?? 0)
+        .toList();
+
+    final List<int> left = parse(a);
+    final List<int> right = parse(b);
+    final int length = left.length > right.length ? left.length : right.length;
+    for (int i = 0; i < length; i++) {
+      final int l = i < left.length ? left[i] : 0;
+      final int r = i < right.length ? right[i] : 0;
+      if (l != r) return l.compareTo(r);
+    }
+    return 0;
+  }
+
   /// 插件根目录（不存在时创建）。
   static Future<Directory> directory() async {
     final Directory support = await getApplicationSupportDirectory();
@@ -246,6 +264,36 @@ class PluginManager {
 
     const String prefix = 'assets/plugins/$builtinId/';
     try {
+      final String assetManifestText = await rootBundle.loadString(
+        'assets/plugins/$builtinId/manifest.json',
+      );
+      final dynamic decodedAsset = jsonDecode(assetManifestText);
+      final PluginManifest assetManifest = PluginManifest.fromJson(
+        Map<String, dynamic>.from(decodedAsset as Map),
+        builtin: true,
+      );
+
+      // 用户安装过更高版本的 standard 插件时，不被随包旧资源覆盖。
+      final File installedManifestFile = File(
+        '${target.path}${Platform.pathSeparator}$manifestName',
+      );
+      if (await installedManifestFile.exists()) {
+        try {
+          final dynamic decoded = jsonDecode(
+            await installedManifestFile.readAsString(),
+          );
+          final PluginManifest installed = PluginManifest.fromJson(
+            Map<String, dynamic>.from(decoded as Map),
+            builtin: true,
+          );
+          if (compareVersions(installed.version, assetManifest.version) > 0) {
+            return;
+          }
+        } catch (error) {
+          debugPrint('读取已安装 standard 版本失败，回退内置资源：$error');
+        }
+      }
+
       final AssetManifest manifest = await AssetManifest.loadFromAssetBundle(
         rootBundle,
       );
@@ -444,13 +492,33 @@ class PluginManager {
         Map<String, dynamic>.from(decoded),
         builtin: false,
       );
-      if (manifest.id == builtinId) {
-        throw const PluginException('不能覆盖内置插件 $builtinId');
-      }
 
       final Directory target = Directory(
         '${root.path}${Platform.pathSeparator}${manifest.id}',
       );
+      if (manifest.id == builtinId) {
+        // 内置插件仍不可卸载，但允许安装更高版本实现热更新。
+        final File installedManifest = File(
+          '${target.path}${Platform.pathSeparator}$manifestName',
+        );
+        if (await installedManifest.exists()) {
+          try {
+            final dynamic installedJson = jsonDecode(
+              await installedManifest.readAsString(),
+            );
+            final PluginManifest installed = PluginManifest.fromJson(
+              Map<String, dynamic>.from(installedJson as Map),
+              builtin: true,
+            );
+            if (compareVersions(manifest.version, installed.version) <= 0) {
+              throw PluginException('standard 插件版本必须高于当前 ${installed.version}');
+            }
+          } catch (error) {
+            if (error is PluginException) rethrow;
+            // 已安装清单损坏时允许覆盖修复
+          }
+        }
+      }
       String? existingConfig;
       if (await target.exists()) {
         // 升级插件时保留用户已保存的配置，避免被 zip 内默认配置覆盖。

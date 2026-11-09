@@ -54,11 +54,15 @@ void main() {
     }
   });
 
-  Map<String, dynamic> manifest(String id, {List<String>? types}) {
+  Map<String, dynamic> manifest(
+    String id, {
+    List<String>? types,
+    String version = '1.0.0',
+  }) {
     return <String, dynamic>{
       'id': id,
       'name': '测试插件',
-      'version': '1.0.0',
+      'version': version,
       'apiVersion': 1,
       'types': types ?? <String>['single_choice'],
     };
@@ -113,13 +117,32 @@ void main() {
     });
   });
 
-  test('内置 standard 不可覆盖、不可卸载', () async {
-    expect(
-      () => PluginManager.importZipBytes(_zip(manifest('standard'))),
+  test('内置 standard 支持高版本热更新，但仍不可卸载', () async {
+    await PluginManager.importZipBytes(
+      _zip(manifest('standard', version: '1.0.0')),
+    );
+    await PluginManager.importZipBytes(
+      _zip(manifest('standard', version: '1.0.1')),
+    );
+
+    final PluginManifest? installed = await PluginManager.find('standard');
+    expect(installed?.version, '1.0.1');
+
+    // 同版本或降级不允许覆盖
+    await expectLater(
+      PluginManager.importZipBytes(
+        _zip(manifest('standard', version: '1.0.1')),
+      ),
       throwsA(isA<PluginException>()),
     );
-    expect(
-      () => PluginManager.uninstall('standard'),
+    await expectLater(
+      PluginManager.importZipBytes(
+        _zip(manifest('standard', version: '0.9.0')),
+      ),
+      throwsA(isA<PluginException>()),
+    );
+    await expectLater(
+      PluginManager.uninstall('standard'),
       throwsA(isA<PluginException>()),
     );
   });

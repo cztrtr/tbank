@@ -262,6 +262,15 @@ config.html
 设置 → 插件管理 → 导入本地 zip / 从网络下载 zip。zip 内可以根目录直接放
 `manifest.json`，也可以套一层 `<id>/`。
 
+### 内置 standard 热更新
+
+`standard` 仍然不可卸载，但允许安装**更高版本**的 zip 做热更新：
+
+1. zip 里 manifest 的 `id` 写 `standard`，`version` 必须高于当前已安装版本；
+2. 安装后下次启动 `ensureBuiltin()` 不会再用随包旧资源覆盖；
+3. 同版本或降级会被拒绝；
+4. 第一次需要安装带热更新支持的 App 版本，之后就可以只发插件 zip。
+
 ## 9. 安全提示
 
 - 只安装可信插件；
