@@ -1,0 +1,26 @@
+{
+  "id": "standard",
+  "name": "标准题型",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "description": "内置插件：单选、多选、判断、填空/解释",
+  "types": [
+    "single_choice",
+    "multiple_choice",
+    "true_false",
+    "fill_blank"
+  ],
+  "typeNames": {
+    "single_choice": "单选",
+    "multiple_choice": "多选",
+    "true_false": "判断",
+    "fill_blank": "填空 / 简答"
+  },
+  "typeDescriptions": {
+    "single_choice": "单选题：4~5 个选项，只有一个正确答案；options 为 [{key,text}]，correctAnswer 数组只放一个选项 key。",
+    "multiple_choice": "多选题：4~5 个选项，至少两个正确答案；options 为 [{key,text}]，correctAnswer 数组放多个选项 key。",
+    "true_false": "判断题：固定两个选项 A.正确、B.错误；correctAnswer 数组只放 A 或 B。",
+    "fill_blank": "填空题/名词解释/解答/证明：options 为空数组；correctAnswer 数组放参考答案文本，解析里写关键得分点。"
+  },
+  "builtin": true
+}

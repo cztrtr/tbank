@@ -8,6 +8,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.DocumentsContract
 import android.provider.Settings
+import android.util.Log
 import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -38,6 +39,7 @@ class MainActivity : FlutterActivity() {
     private val channelName = "tbank/saf"
     private val updateChannelName = "tbank/app_update"
     private val requestPickDirectory = 0x5AF1
+    private val tag = "TBankSaf"
 
     private var pendingPickResult: MethodChannel.Result? = null
 
@@ -55,7 +57,12 @@ class MainActivity : FlutterActivity() {
                         "listChildren" -> {
                             val uri = call.argument<String>("uri")
                             if (uri == null) result.error("bad_args", "缺少 uri", null)
-                            else listChildren(uri, call.argument<String>("ext"), result)
+                            else listChildren(
+                                uri,
+                                call.argument<String>("ext"),
+                                call.argument<Boolean>("recursive") ?: false,
+                                result
+                            )
                         }
                         "readText" -> {
                             val uri = call.argument<String>("uri")
@@ -184,47 +191,149 @@ class MainActivity : FlutterActivity() {
 
     // ---------------------------------------------------------------- 读写实现
 
-    private fun listChildren(dirUri: String, ext: String?, result: MethodChannel.Result) {
+    /**
+     * 列出目录下的文件；[recursive] 为 true 时额外向下扫一层子目录。
+     *
+     * [dirUri] 可以是授权根 tree URI，也可以是递归时拿到的子目录 document URI。
+     * 子目录文件带 parentUri（文件所在目录）和 subDirectory（相对根的子目录名），
+     * 供 Dart 侧定位配图、回拷和分组。
+     */
+    private fun listChildren(
+        dirUri: String,
+        ext: String?,
+        recursive: Boolean,
+        result: MethodChannel.Result
+    ) {
         runIo(result) {
-            val tree = Uri.parse(dirUri)
-            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
-                tree,
-                DocumentsContract.getTreeDocumentId(tree)
-            )
-
-            val projection = arrayOf(
-                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-                DocumentsContract.Document.COLUMN_MIME_TYPE,
-                DocumentsContract.Document.COLUMN_SIZE,
-                DocumentsContract.Document.COLUMN_LAST_MODIFIED
-            )
-
+            val (tree, documentId, _) = resolveDirectory(dirUri)
             val out = ArrayList<Map<String, Any?>>()
-
-            contentResolver.query(childrenUri, projection, null, null, null)?.use { cursor ->
-                while (cursor.moveToNext()) {
-                    val docId = cursor.getString(0)
-                    val name = cursor.getString(1) ?: continue
-                    val mime = cursor.getString(2)
-
-                    // 跳过子目录
-                    if (mime == DocumentsContract.Document.MIME_TYPE_DIR) continue
-                    if (ext != null && !name.lowercase().endsWith(ext.lowercase())) continue
-
-                    out.add(
-                        mapOf(
-                            "name" to name,
-                            "uri" to DocumentsContract
-                                .buildDocumentUriUsingTree(tree, docId).toString(),
-                            "size" to if (cursor.isNull(3)) null else cursor.getLong(3),
-                            "lastModified" to if (cursor.isNull(4)) null else cursor.getLong(4)
-                        )
-                    )
-                }
-            }
+            queryChildren(
+                tree,
+                documentId,
+                dirUri,
+                ext,
+                recursive,
+                "",
+                out
+            )
             out
         }
+    }
+
+    /**
+     * 查询一个目录并写入 [out]。
+     *
+     * 子目录只在 [allowSubdirectories] 为 true 时进入，且只再进一层；
+     * 单个子目录读取失败只记日志，不影响其它目录。
+     */
+    private fun queryChildren(
+        tree: Uri,
+        documentId: String,
+        parentDirUri: String,
+        ext: String?,
+        allowSubdirectories: Boolean,
+        subDirectory: String,
+        out: MutableList<Map<String, Any?>>
+    ) {
+        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
+            tree,
+            documentId
+        )
+
+        val projection = arrayOf(
+            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+            DocumentsContract.Document.COLUMN_MIME_TYPE,
+            DocumentsContract.Document.COLUMN_SIZE,
+            DocumentsContract.Document.COLUMN_LAST_MODIFIED
+        )
+
+        contentResolver.query(childrenUri, projection, null, null, null)?.use { cursor ->
+            while (cursor.moveToNext()) {
+                val docId = cursor.getString(0) ?: continue
+                val name = cursor.getString(1) ?: continue
+                val mime = cursor.getString(2)
+                val childUri = DocumentsContract
+                    .buildDocumentUriUsingTree(tree, docId)
+                    .toString()
+
+                if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
+                    if (!allowSubdirectories || name.startsWith(".")) continue
+                    try {
+                        queryChildren(
+                            tree,
+                            docId,
+                            childUri,
+                            ext,
+                            false,
+                            name,
+                            out
+                        )
+                    } catch (error: Exception) {
+                        Log.w(tag, "读取子目录失败：$childUri", error)
+                    }
+                    continue
+                }
+
+                if (ext != null && !name.lowercase().endsWith(ext.lowercase())) {
+                    continue
+                }
+
+                out.add(
+                    mapOf(
+                        "name" to name,
+                        "uri" to childUri,
+                        "parentUri" to parentDirUri,
+                        "subDirectory" to subDirectory,
+                        "size" to if (cursor.isNull(3)) null else cursor.getLong(3),
+                        "lastModified" to if (cursor.isNull(4)) null else cursor.getLong(4)
+                    )
+                )
+            }
+        }
+    }
+
+    /**
+     * 把「目录 URI」解析成 tree、目录 document id 和目录 document URI。
+     *
+     * 支持两种形式：
+     * - 授权根：`.../tree/primary%3A题库`；
+     * - 子目录：`.../tree/primary%3A题库/document/primary%3A题库%2F线代`。
+     * 递归扫描拿到的子目录 URI 属于后者，readChildBytes / writeChildText
+     * 必须能处理，否则子目录里的配图、AI 变式回写都会失败。
+     */
+    private fun resolveDirectory(uriString: String): Triple<Uri, String, Uri> {
+        val uri = Uri.parse(uriString)
+        val treeDocumentId = try {
+            DocumentsContract.getTreeDocumentId(uri)
+        } catch (_: IllegalArgumentException) {
+            null
+        }
+
+        if (treeDocumentId != null) {
+            return Triple(
+                uri,
+                treeDocumentId,
+                DocumentsContract.buildDocumentUriUsingTree(uri, treeDocumentId)
+            )
+        }
+
+        val documentId = DocumentsContract.getDocumentId(uri)
+        val segments = uri.pathSegments
+        val treeIndex = segments.indexOf("tree")
+        require(treeIndex >= 0 && treeIndex + 1 < segments.size) {
+            "不是有效的目录 URI：$uriString"
+        }
+
+        val tree = DocumentsContract.buildTreeDocumentUri(
+            uri.authority,
+            segments[treeIndex + 1]
+        )
+        return Triple(
+            tree,
+            documentId,
+            DocumentsContract.buildDocumentUriUsingTree(tree, documentId)
+        )
     }
 
     private fun readText(uriString: String): String {
@@ -254,9 +363,8 @@ class MainActivity : FlutterActivity() {
      * 返回最终文档 URI，方便调用方后续直接读写。
      */
     private fun writeChildText(dirUriString: String, fileName: String, text: String): String {
-        val tree = Uri.parse(dirUriString)
-        val parentDocId = DocumentsContract.getTreeDocumentId(tree)
-        val parentDocUri = DocumentsContract.buildDocumentUriUsingTree(tree, parentDocId)
+        // 子目录的 document URI 也支持：resolveDirectory 会还原出授权根 tree
+        val (tree, parentDocId, parentDocUri) = resolveDirectory(dirUriString)
         val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(tree, parentDocId)
 
         var existingId: String? = null
@@ -300,10 +408,11 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun readChildBytes(dirUriString: String, fileName: String): ByteArray? {
-        val tree = Uri.parse(dirUriString)
+        // 子目录的 document URI 也支持，递归题库的配图靠它读取
+        val (tree, parentDocId, _) = resolveDirectory(dirUriString)
         val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
             tree,
-            DocumentsContract.getTreeDocumentId(tree)
+            parentDocId
         )
 
         val projection = arrayOf(

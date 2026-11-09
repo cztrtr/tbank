@@ -1,11 +1,10 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 
 import '../models/question_bank_file.dart';
 import '../services/ai_question_generator.dart';
 import '../services/app_config.dart';
 import '../services/bank_io.dart';
+import '../services/bank_repository.dart';
 import '../services/mistake_books.dart';
 import 'practice_page.dart';
 
@@ -125,6 +124,19 @@ class _MistakeBooksPageState extends State<MistakeBooksPage> {
       add(dirRef, BankIo.displayNameOf(dirRef));
     }
 
+    // 递归一层的子目录题库：分组名是「根名/子目录」，父级仍按根目录推导
+    try {
+      final BankScanResult scan =
+          await BankRepository.instance.listAll(refresh: true);
+      for (final QuestionBankFile file in scan.files) {
+        // AI 题库没有 sourceDirectoryRef，交给下面的 AI 分支处理
+        if (file.sourceDirectoryRef == null) continue;
+        add(file.rootDirectoryRef, file.directoryName ?? '');
+      }
+    } catch (error) {
+      debugPrint('读取题库子目录失败：$error');
+    }
+
     try {
       for (final ({String name, String path}) topic
           in await AiQuestionGenerator.listTopicDirectories()) {
@@ -147,7 +159,7 @@ class _MistakeBooksPageState extends State<MistakeBooksPage> {
       MaterialPageRoute<void>(
         builder: (_) => PracticePage(
           // 配图就在本子所在文件夹里（可能是分组子文件夹）
-          bank: book.toBankFile(File(book.path).parent.path),
+          bank: book.toBankFile(BankIo.directoryOfFile(book.path)),
         ),
       ),
     );
@@ -270,11 +282,11 @@ class _MistakeBooksPageState extends State<MistakeBooksPage> {
       );
     }
 
-    // 父文件夹 → 题库子文件夹 → 错题本
+    // 父文件夹 → 添加的目录 → 最后一级子目录 → 错题本
     final Map<String, String> parentLabels = <String, String>{};
     final Set<String> virtualParents = <String>{};
-    final Map<String, Map<String, List<MistakeBookInfo>>> tree =
-        <String, Map<String, List<MistakeBookInfo>>>{};
+    final Map<String, Map<String, Map<String, List<MistakeBookInfo>>>> tree =
+        <String, Map<String, Map<String, List<MistakeBookInfo>>>>{};
 
     for (final MistakeBookInfo book in _books) {
       final _GroupSource? source = _groupSources[book.groupName];
@@ -298,18 +310,45 @@ class _MistakeBooksPageState extends State<MistakeBooksPage> {
         virtualParents.add(parentKey);
       }
       parentLabels.putIfAbsent(parentKey, () => parentLabel);
+
+      // 把「根目录/子目录」拆成 rootLabel + subLabel；同一根目录下的多个
+      // 子目录共用一行 rootLabel，不再重复显示「细胞生物学」。
+      final List<String> parts = book.groupName.split('/');
+      final bool nested = parts.length > 1 &&
+          source != null &&
+          BankIo.displayNameOf(source.ref) != parts.last;
+      final String rootLabel;
+      final String subLabel;
+      if (book.groupName.isEmpty) {
+        rootLabel = '未分组';
+        subLabel = '';
+      } else if (nested) {
+        rootLabel = parts.first;
+        subLabel = parts.sublist(1).join('/');
+      } else {
+        rootLabel = _childLabelOf(book.groupName);
+        subLabel = '';
+      }
+
       tree
-          .putIfAbsent(parentKey, () => <String, List<MistakeBookInfo>>{})
-          .putIfAbsent(book.groupName, () => <MistakeBookInfo>[])
+          .putIfAbsent(
+            parentKey,
+            () => <String, Map<String, List<MistakeBookInfo>>>{},
+          )
+          .putIfAbsent(
+            rootLabel,
+            () => <String, List<MistakeBookInfo>>{},
+          )
+          .putIfAbsent(subLabel, () => <MistakeBookInfo>[])
           .add(book);
     }
 
     return ListView(
       padding: const EdgeInsets.symmetric(vertical: 8),
       children: <Widget>[
-        for (final MapEntry<String, Map<String, List<MistakeBookInfo>>> parent
-            in tree.entries) ...<Widget>[
-          // 父文件夹标题
+        for (final MapEntry<String, Map<String, Map<String, List<MistakeBookInfo>>>>
+            parent in tree.entries) ...<Widget>[
+          // 父文件夹标题（同一父级只画一次）
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
             child: Row(
@@ -336,48 +375,114 @@ class _MistakeBooksPageState extends State<MistakeBooksPage> {
             ),
           ),
 
-          for (final MapEntry<String, List<MistakeBookInfo>> child
-              in parent.value.entries) ...<Widget>[
-            // 题库子文件夹标题（没有父级时省略）
-            if (!virtualParents.contains(parent.key))
-              Padding(
-                padding: const EdgeInsets.fromLTRB(30, 10, 16, 2),
-                child: Row(
-                  children: <Widget>[
-                    Icon(
-                      Icons.folder_outlined,
-                      size: 18,
-                      color: colorScheme.onSurfaceVariant,
-                    ),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        _childLabelOf(child.key),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-
-            // 子文件夹里的各本错题本
-            for (final MistakeBookInfo book in child.value)
-              Padding(
-                padding: EdgeInsets.only(
-                  left: virtualParents.contains(parent.key) ? 12 : 44,
-                ),
-                child: _buildBookTile(colorScheme, book),
-              ),
-          ],
+          for (final MapEntry<String, Map<String, List<MistakeBookInfo>>>
+              rootEntry in parent.value.entries)
+            ..._buildRootSection(
+              colorScheme,
+              virtualParents.contains(parent.key),
+              rootEntry,
+            ),
         ],
       ],
     );
+  }
+
+  /// 渲染一个添加目录：目录标题只画一次，下面按最后一级子目录分组。
+  ///
+  /// 递归题库的分组名是「根目录/子目录」，同一个根目录的多个子目录会合并到
+  /// 这里，避免「细胞生物学」重复出现；AI 题库的「主题/子主题」保持原样。
+  List<Widget> _buildRootSection(
+    ColorScheme colorScheme,
+    bool virtualParent,
+    MapEntry<String, Map<String, List<MistakeBookInfo>>> rootEntry,
+  ) {
+    final List<Widget> children = <Widget>[];
+
+    // 添加的题库目录标题（没有父级时省略，避免和父标题重复）
+    if (!virtualParent) {
+      children.add(
+        Padding(
+          padding: const EdgeInsets.fromLTRB(30, 10, 16, 2),
+          child: Row(
+            children: <Widget>[
+              Icon(
+                Icons.folder_outlined,
+                size: 18,
+                color: colorScheme.onSurfaceVariant,
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  rootEntry.key,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // 根目录的本子排最前，然后按最后一级子目录分组
+    final Map<String, List<MistakeBookInfo>> bySubDirectory = rootEntry.value;
+    final List<String> subDirectories = bySubDirectory.keys.toList()
+      ..sort((String a, String b) {
+        if (a.isEmpty) return b.isEmpty ? 0 : -1;
+        if (b.isEmpty) return 1;
+        return a.toLowerCase().compareTo(b.toLowerCase());
+      });
+
+    for (final String subDirectory in subDirectories) {
+      // 最后一级子目录标题，例如「细胞生物学」下面的「1_绪论」
+      if (subDirectory.isNotEmpty) {
+        children.add(
+          Padding(
+            padding: const EdgeInsets.fromLTRB(44, 8, 16, 2),
+            child: Row(
+              children: <Widget>[
+                Icon(
+                  Icons.folder_outlined,
+                  size: 16,
+                  color: colorScheme.onSurfaceVariant,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    subDirectory,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      }
+
+      for (final MistakeBookInfo book in bySubDirectory[subDirectory]!) {
+        children.add(
+          Padding(
+            padding: EdgeInsets.only(
+              left: virtualParent ? 12 : (subDirectory.isEmpty ? 44 : 56),
+            ),
+            child: _buildBookTile(colorScheme, book),
+          ),
+        );
+      }
+    }
+
+    return children;
   }
 
   /// 子文件夹展示名：优先用源目录的末段（AI 二级目录的分组名形如

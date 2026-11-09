@@ -140,11 +140,13 @@ void main() {
   });
 
   test('启动迁移只跑一次，并写一次性标记', () async {
-    final Directory bankDir =
-        Directory('${temp.path}${Platform.pathSeparator}启动题库');
+    final Directory bankDir = Directory(
+      '${temp.path}${Platform.pathSeparator}启动题库',
+    );
     await bankDir.create(recursive: true);
-    final File bankFile =
-        File('${bankDir.path}${Platform.pathSeparator}题库.json');
+    final File bankFile = File(
+      '${bankDir.path}${Platform.pathSeparator}题库.json',
+    );
     await bankFile.writeAsString(
       jsonEncode(<String, dynamic>{
         'questions': <Map<String, dynamic>>[
@@ -179,5 +181,87 @@ void main() {
     MistakeBooks.resetStartupMigrationForTest();
     await MistakeBooks.migrateAllBankIds();
     expect(await bankFile.readAsString(), before);
+  });
+
+  test('子目录题库的错题按「根目录/子目录」分组', () async {
+    final Directory root = Directory('${temp.path}${Platform.pathSeparator}高数');
+    final Directory sub = Directory('${root.path}${Platform.pathSeparator}线代');
+    await sub.create(recursive: true);
+
+    final File bankFile = File('${sub.path}${Platform.pathSeparator}第一章.json');
+    await bankFile.writeAsString(
+      jsonEncode(<String, dynamic>{
+        'questions': <Map<String, dynamic>>[
+          <String, dynamic>{
+            'id': 'Q001',
+            'type': 'fill_blank',
+            'question': '题',
+            'options': <dynamic>[],
+            'correctAnswer': <String>['答案'],
+            'stats': <String, int>{'attemptCount': 1, 'wrongCount': 1},
+          },
+        ],
+      }),
+    );
+
+    AppConfig.questionBankDirsNotifier.value = <String>[root.path];
+    final int added = await MistakeBooks.collectFromBanks();
+    expect(added, 1);
+
+    final List<MistakeBookInfo> books = await MistakeBooks.list();
+    expect(books, hasLength(1));
+    expect(books.single.groupName, '高数/线代');
+    expect(
+      books.single.path.replaceAll(r'\', '/'),
+      contains('mistakes/高数/线代/Alpha.json'),
+    );
+  });
+
+  test('同一分组下不同插件的错题分本，一本只属于一个插件', () async {
+    final Directory root = Directory(
+      '${temp.path}${Platform.pathSeparator}混合组',
+    );
+    await root.create(recursive: true);
+
+    Future<void> writeBank(String name, {String? plugin}) async {
+      final Map<String, dynamic> json = <String, dynamic>{
+        'questions': <Map<String, dynamic>>[
+          <String, dynamic>{
+            'id': 'Q_$name',
+            'type': 'fill_blank',
+            'question': '题',
+            'options': <dynamic>[],
+            'correctAnswer': <String>['答案'],
+            'stats': <String, int>{'attemptCount': 1, 'wrongCount': 1},
+          },
+        ],
+      };
+      if (plugin != null) json['plugin'] = plugin;
+
+      await File('${root.path}${Platform.pathSeparator}$name.json')
+          .writeAsString(jsonEncode(json));
+    }
+
+    await writeBank('内置');
+    await writeBank('编程', plugin: 'coding');
+
+    AppConfig.questionBankDirsNotifier.value = <String>[root.path];
+    final int added = await MistakeBooks.collectFromBanks();
+    expect(added, 2);
+
+    final List<MistakeBookInfo> books = await MistakeBooks.list();
+    expect(books, hasLength(2));
+    expect(books.map((MistakeBookInfo book) => book.plugin).toSet(), <String>{
+      'standard',
+      'coding',
+    });
+    expect(
+      books.every((MistakeBookInfo book) => book.groupName == '混合组'),
+      isTrue,
+    );
+    expect(books.map((MistakeBookInfo book) => book.name).toSet(), <String>{
+      'Alpha',
+      'Beta',
+    });
   });
 }

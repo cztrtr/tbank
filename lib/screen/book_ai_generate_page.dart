@@ -6,6 +6,8 @@ import 'package:image_picker/image_picker.dart';
 
 import '../services/ai_question_generator.dart';
 import '../services/ds_api_service.dart';
+import '../services/plugin_manager.dart';
+import 'plugin_type_selector.dart';
 
 /// 拍书出题页。
 ///
@@ -37,9 +39,11 @@ class _BookAiGeneratePageState extends State<BookAiGeneratePage> {
   final TextEditingController _requirementsController = TextEditingController();
 
   final List<Uint8List> _images = <Uint8List>[]; // 已选图片
-  final Set<String> _selectedTypes = <String>{
-    ...AiQuestionGenerator.allTypeLabels,
-  };
+
+  bool _loadingPlugins = true;
+  List<PluginManifest> _plugins = <PluginManifest>[];
+  PluginManifest? _plugin;
+  final Set<String> _selectedTypes = <String>{};
   int _count = 10;
 
   bool _generating = false;
@@ -58,7 +62,53 @@ class _BookAiGeneratePageState extends State<BookAiGeneratePage> {
   @override
   void initState() {
     super.initState();
+    _loadPlugins();
     _loadBanks();
+  }
+
+  Future<void> _loadPlugins() async {
+    try {
+      final List<PluginManifest> plugins = await PluginManager.list();
+      if (!mounted) return;
+      PluginManifest? initial;
+      for (final PluginManifest item in plugins) {
+        if (item.builtin) {
+          initial = item;
+          break;
+        }
+      }
+      initial ??= plugins.isEmpty ? null : plugins.first;
+      setState(() {
+        _plugins = plugins;
+        _plugin = initial;
+        _selectedTypes
+          ..clear()
+          ..addAll(initial?.types ?? const <String>[]);
+        _loadingPlugins = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loadingPlugins = false;
+        _error = '读取插件失败：$error';
+      });
+    }
+  }
+
+  void _choosePlugin(PluginManifest? plugin) {
+    if (plugin == null) return;
+    setState(() {
+      _plugin = plugin;
+      _selectedTypes
+        ..clear()
+        ..addAll(plugin.types);
+    });
+  }
+
+  void _toggleType(String type) {
+    setState(() {
+      if (!_selectedTypes.add(type)) _selectedTypes.remove(type);
+    });
   }
 
   /// 扫描 `Question/` 下已有的题库，供列表展示与删除。
@@ -172,13 +222,18 @@ class _BookAiGeneratePageState extends State<BookAiGeneratePage> {
       _toast('请填写一级目录名');
       return;
     }
+    final PluginManifest? plugin = _plugin;
+    if (plugin == null) {
+      _toast('请先选择出题插件');
+      return;
+    }
     if (_selectedTypes.isEmpty) {
       _toast('至少选择一种题型');
       return;
     }
 
-    final List<String> types = AiQuestionGenerator.allTypeLabels
-        .where(_selectedTypes.contains)
+    final List<PluginTypeInfo> selectedTypes = plugin.typeInfos
+        .where((PluginTypeInfo type) => _selectedTypes.contains(type.id))
         .toList();
 
     FocusScope.of(context).unfocus();
@@ -190,8 +245,6 @@ class _BookAiGeneratePageState extends State<BookAiGeneratePage> {
     });
 
     final List<AiBankInfo> saved = <AiBankInfo>[];
-    int finished = 0;
-    int batchIndex = 0;
 
     try {
       // 先定好这次生成用的基名：目录里已有同名文件时会自动改成
@@ -203,54 +256,57 @@ class _BookAiGeneratePageState extends State<BookAiGeneratePage> {
       );
       if (!mounted) return;
 
-      while (finished < _count && batchIndex < 10) {
-        final int remaining = _count - finished;
-        final int batchCount = remaining > AiQuestionGenerator.perBook
-            ? AiQuestionGenerator.perBook
-            : remaining;
-        batchIndex++;
+      final List<Map<String, dynamic>> questions =
+          await AiQuestionGenerator.generateWithCoverage(
+            plugin: plugin,
+            types: selectedTypes,
+            target: _count,
+            request: (PluginTypeInfo type, int count) {
+              return DsApiService.generateQuestionsFromImages(
+                images: _images,
+                requirements: _requirementsController.text,
+                types: <String>[type.id],
+                count: count,
+                typeSpec: AiQuestionGenerator.buildTypeSpec(<PluginTypeInfo>[
+                  type,
+                ]),
+              );
+            },
+            onProgress: (int finished, int total) {
+              if (!mounted) return;
+              setState(() => _progress = (finished: finished, total: total));
+            },
+          );
 
-        final String raw = await DsApiService.generateQuestionsFromImages(
-          images: _images,
-          requirements: _requirementsController.text,
-          types: types,
-          count: batchCount,
-        );
+      if (!mounted) return;
+      for (int i = 0; i < questions.length; i++) {
+        questions[i]['id'] = 'Q${(i + 1).toString().padLeft(3, '0')}';
+      }
 
-        final List<Map<String, dynamic>> parsed =
-            AiQuestionGenerator.parseQuestions(raw);
-        if (parsed.isEmpty) {
-          if (saved.isEmpty) {
-            throw DsApiException('AI 返回的题目格式不正确，请重试');
-          }
-          break; // 后续批次失败：保留已生成的部分
-        }
-
-        final List<Map<String, dynamic>> batch = parsed.length > batchCount
-            ? parsed.sublist(0, batchCount)
-            : parsed;
-        for (int i = 0; i < batch.length; i++) {
-          batch[i]['id'] = 'Q${(finished + i + 1).toString().padLeft(3, '0')}';
-        }
-
+      for (
+        int start = 0, batchIndex = 1;
+        start < questions.length;
+        start += AiQuestionGenerator.perBook, batchIndex++
+      ) {
+        final int end = start + AiQuestionGenerator.perBook > questions.length
+            ? questions.length
+            : start + AiQuestionGenerator.perBook;
         saved.add(
           await AiQuestionGenerator.saveBatchTo(
             topic: topic,
             subTopic: _subTopicController.text,
             baseName: baseName,
-            questions: batch,
+            questions: questions.sublist(start, end),
             batchIndex: batchIndex,
+            plugin: plugin.id,
+            pluginVersion: plugin.apiVersion,
           ),
         );
-        finished += batch.length;
-
-        if (!mounted) return;
-        setState(() => _progress = (finished: finished, total: _count));
       }
 
       if (!mounted) return;
       setState(() => _saved = saved);
-      _toast('已生成 $finished 道题，保存为 ${saved.length} 个文件');
+      _toast('已生成 ${questions.length} 道题，保存为 ${saved.length} 个文件');
       await _loadBanks();
     } on DsApiException catch (error) {
       if (!mounted) return;
@@ -375,30 +431,15 @@ class _BookAiGeneratePageState extends State<BookAiGeneratePage> {
           ),
           const SizedBox(height: 16),
 
-          // ---- 题型 ----
-          Text(
-            '题型',
-            style: textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
-          ),
-          const SizedBox(height: 6),
-          Wrap(
-            spacing: 8,
-            children: <Widget>[
-              for (final String label in AiQuestionGenerator.allTypeLabels)
-                FilterChip(
-                  label: Text(label),
-                  selected: _selectedTypes.contains(label),
-                  onSelected: _generating
-                      ? null
-                      : (bool selected) => setState(() {
-                          if (selected) {
-                            _selectedTypes.add(label);
-                          } else {
-                            _selectedTypes.remove(label);
-                          }
-                        }),
-                ),
-            ],
+          // ---- 插件与题型 ----
+          PluginTypeSelector(
+            plugins: _plugins,
+            selectedPlugin: _plugin,
+            selectedTypes: _selectedTypes,
+            enabled: !_generating,
+            loading: _loadingPlugins,
+            onPluginChanged: _choosePlugin,
+            onTypeToggled: _toggleType,
           ),
           const SizedBox(height: 16),
 

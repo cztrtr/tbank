@@ -44,6 +44,7 @@ class MistakeBookInfo {
     required this.groupName,
     required this.total,
     required this.completed,
+    this.plugin,
   });
 
   /// 本子名，例如 `Alpha`。
@@ -54,6 +55,9 @@ class MistakeBookInfo {
 
   /// 所属分组（题库文件夹名，例如 `组织学`）；空字符串表示老数据的「未分组」。
   final String groupName;
+
+  /// 处理这本错题的插件 id；null 表示老本子，按 standard 处理。
+  final String? plugin;
 
   /// 题目总数。
   final int total;
@@ -237,6 +241,7 @@ class MistakeBooks {
           name: book.name,
           path: file.path,
           groupName: _groupOf(dir, file),
+          plugin: book.plugin,
           total: book.questions.length,
           completed: completed,
         ),
@@ -337,12 +342,16 @@ class MistakeBooks {
       }
     }
 
+    // 递归扫描后，同一文件可能从根目录和子目录各被扫到一次，按 uri 去重
+    final Set<String> scannedBankUris = <String>{};
+
     for (final ({String ref, String group}) source in sourceDirs) {
       List<QuestionBankFile> bankFiles;
       try {
         bankFiles = await BankIo.listJsonFiles(
           source.ref,
           directoryName: source.group,
+          recursive: true,
         );
       } catch (error) {
         debugPrint('扫描题库目录失败：${source.ref} $error');
@@ -350,8 +359,19 @@ class MistakeBooks {
       }
 
       for (final QuestionBankFile bankFile in bankFiles) {
+        if (!scannedBankUris.add(bankFile.uri)) continue;
+
+        // 子目录题库按「根组名/子目录」分组；根目录文件保持原组名
+        final String groupName = bankFile.subDirectory.isEmpty
+            ? source.group
+            : '${source.group}/${bankFile.subDirectory}';
+
         final dynamic decoded = await _readBankJson(bankFile);
         if (decoded is! Map) continue;
+
+        // 一个题库只由一个插件处理；老题库没有标记，按 standard 处理
+        final String pluginRaw = (decoded['plugin']?.toString() ?? '').trim();
+        final String plugin = pluginRaw.isEmpty ? 'standard' : pluginRaw;
 
         final dynamic rawQuestions = decoded['questions'];
         if (rawQuestions is! List) continue;
@@ -385,7 +405,8 @@ class MistakeBooks {
               bankFile: bankFile,
               origin: migrated ? id : legacyOrigin,
               legacyOrigin: legacyOrigin,
-              groupName: source.group,
+              groupName: groupName,
+              plugin: plugin,
             ),
           );
         }
@@ -411,8 +432,8 @@ class MistakeBooks {
     //
     //    新旧双形态判断：稳定 id 和旧格式键任一命中都视为已收录，
     //    兼容迁移失败、错题本文件损坏等没能完成迁移的情况。
-    final Map<String, List<_Candidate>> acceptedByGroup =
-        <String, List<_Candidate>>{};
+    final Map<({String group, String plugin}), List<_Candidate>>
+    acceptedByGroup = <({String group, String plugin}), List<_Candidate>>{};
 
     for (final _Candidate candidate in candidates) {
       if (deletedOrigins.contains(candidate.origin) ||
@@ -425,16 +446,20 @@ class MistakeBooks {
       }
       knownOrigins.add(candidate.origin);
       acceptedByGroup
-          .putIfAbsent(candidate.groupName, () => <_Candidate>[])
+          .putIfAbsent((
+            group: candidate.groupName,
+            plugin: candidate.plugin,
+          ), () => <_Candidate>[])
           .add(candidate);
     }
 
-    // 5. 按组收录：每组目录独立编号、独立命名、独立按 25 题分本
+    // 5. 按「组 + 插件」收录：一本错题本只收同一插件的题
     int added = 0;
 
-    for (final MapEntry<String, List<_Candidate>> entry
+    for (final MapEntry<({String group, String plugin}), List<_Candidate>> entry
         in acceptedByGroup.entries) {
-      final String groupName = entry.key;
+      final String groupName = entry.key.group;
+      final String plugin = entry.key.plugin;
       final List<_Candidate> accepted = entry.value;
 
       // 组目录：root/<组名>；组名为空时直接用根目录
@@ -445,14 +470,19 @@ class MistakeBooks {
         await groupDir.create(recursive: true);
       }
 
-      final List<_BookData> groupBooks = booksByGroup.putIfAbsent(
+      final List<_BookData> allGroupBooks = booksByGroup.putIfAbsent(
         groupName,
         () => <_BookData>[],
       );
 
-      // 组内下一个错题编号：从该组现有本子里取最大 C 编号递增
+      // 只复用同一插件的本子；不同插件各自分本，不混进同一本
+      final List<_BookData> groupBooks = allGroupBooks
+          .where((_BookData book) => (book.plugin ?? 'standard') == plugin)
+          .toList();
+
+      // 组内下一个错题编号：从该组所有本子里取最大 C 编号递增
       int maxNumber = 0;
-      for (final _BookData book in groupBooks) {
+      for (final _BookData book in allGroupBooks) {
         for (final Map<String, dynamic> question in book.questions) {
           final RegExpMatch? match = RegExp(r'^C(\d+)$')
               .firstMatch(question['id']?.toString() ?? '');
@@ -482,7 +512,7 @@ class MistakeBooks {
         pending.add(question);
       }
 
-      // 先填该组已有本子的空位，剩下的按每本 25 题新建
+      // 先填同一插件已有本子的空位，剩下的按每本 25 题新建
       final List<Map<String, dynamic>> remaining =
           List<Map<String, dynamic>>.of(pending);
 
@@ -494,8 +524,8 @@ class MistakeBooks {
         if (remaining.isEmpty) break;
       }
 
-      // 组内命名：从已占用的名字里找空位，删过本子也不会撞名
-      final Set<String> usedNames = groupBooks
+      // 命名从整组已占用的名字里找空位，避免不同插件的本子撞名
+      final Set<String> usedNames = allGroupBooks
           .map((_BookData book) => book.name)
           .toSet();
       while (remaining.isNotEmpty) {
@@ -505,14 +535,15 @@ class MistakeBooks {
         }
         final String name = _nextName(usedNames);
         usedNames.add(name);
-        groupBooks.add(
-          _BookData(
-            file: File('${groupDir.path}${Platform.pathSeparator}$name.json'),
-            name: name,
-            questions: slice,
-            dirty: true,
-          ),
+        final _BookData newBook = _BookData(
+          file: File('${groupDir.path}${Platform.pathSeparator}$name.json'),
+          name: name,
+          plugin: plugin,
+          questions: slice,
+          dirty: true,
         );
+        groupBooks.add(newBook);
+        allGroupBooks.add(newBook);
       }
 
       added += pending.length;
@@ -664,6 +695,7 @@ class MistakeBooks {
         bankFiles = await BankIo.listJsonFiles(
           directoryRef,
           directoryName: BankIo.displayNameOf(directoryRef),
+          recursive: true,
         );
       } catch (error) {
         debugPrint('添加目录后扫描题库失败：$directoryRef $error');
@@ -761,10 +793,7 @@ class MistakeBooks {
         await migrateBankIdsInDirectory(dir);
       }
 
-      await marker.writeAsString(
-        DateTime.now().toIso8601String(),
-        flush: true,
-      );
+      await marker.writeAsString(DateTime.now().toIso8601String(), flush: true);
     } catch (error) {
       // 读不到私有目录、标记写不进去等：下次启动再试，不影响使用
       debugPrint('启动迁移题目 id 失败：$error');
@@ -942,7 +971,10 @@ class MistakeBooks {
     if (dirPath == root.path) return '';
     final String rootPrefix = '${root.path}${Platform.pathSeparator}';
     if (!dirPath.startsWith(rootPrefix)) return '';
-    return dirPath.substring(rootPrefix.length);
+    // 分组名是逻辑名（不是真实路径），统一用 /，和 directoryName / 页面 sources 对齐
+    return dirPath
+        .substring(rootPrefix.length)
+        .replaceAll(Platform.pathSeparator, '/');
   }
 
   /// 组名排序：「未分组」（空字符串）放最后，其余按名称升序。
@@ -1000,12 +1032,21 @@ class MistakeBooks {
       final List<Map<String, dynamic>> questions = raw is List
           ? raw
                 .whereType<Map<String, dynamic>>()
-                .map((Map<String, dynamic> item) =>
-                    Map<String, dynamic>.from(item))
+                .map(
+                  (Map<String, dynamic> item) =>
+                      Map<String, dynamic>.from(item),
+                )
                 .toList()
           : <Map<String, dynamic>>[];
 
-      return _BookData(file: file, name: _baseName(file), questions: questions);
+      return _BookData(
+        file: file,
+        name: _baseName(file),
+        plugin: (decoded['plugin']?.toString() ?? '').trim().isEmpty
+            ? null
+            : decoded['plugin'].toString().trim(),
+        questions: questions,
+      );
     } catch (error) {
       debugPrint('读取错题本失败：${file.path} $error');
       return null;
@@ -1053,9 +1094,11 @@ class MistakeBooks {
   }
 
   static Future<void> _writeBook(_BookData book) async {
-    // 只写 questions：本子名由文件名承载，格式与普通题库保持一致
-    final String content = const JsonEncoder.withIndent('  ')
-        .convert(<String, dynamic>{'questions': book.questions});
+    final Map<String, dynamic> json = <String, dynamic>{};
+    if (book.plugin != null) json['plugin'] = book.plugin;
+    json['questions'] = book.questions;
+
+    final String content = const JsonEncoder.withIndent('  ').convert(json);
     await book.file.writeAsString(content, flush: true);
   }
 }
@@ -1066,6 +1109,7 @@ class _BookData {
     required this.file,
     required this.name,
     required this.questions,
+    this.plugin,
     this.dirty = false,
   });
 
@@ -1073,6 +1117,10 @@ class _BookData {
   final File file;
 
   final String name;
+
+  /// 处理这本错题的插件 id；老本子为 null，按 standard 处理。
+  final String? plugin;
+
   final List<Map<String, dynamic>> questions;
 
   /// 内容是否有改动；只有 dirty 的本子才在收集结束时写盘。
@@ -1087,6 +1135,7 @@ class _Candidate {
     required this.origin,
     required this.legacyOrigin,
     required this.groupName,
+    required this.plugin,
   });
 
   /// 题目 JSON 的浅拷贝；收录时会改写 id / origin / mistakeScore / image。
@@ -1106,4 +1155,7 @@ class _Candidate {
 
   /// 该题所属的题库文件夹名，收录时用它决定本子放进哪个分组目录。
   final String groupName;
+
+  /// 源题库的插件 id；一本错题本只收同一插件的题。
+  final String plugin;
 }

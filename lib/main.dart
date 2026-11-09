@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'screen/main_screen.dart';
 import 'services/app_config.dart';
 import 'services/mistake_books.dart';
+import 'services/plugin_manager.dart';
+import 'services/plugin_runtime.dart';
 
 /// 应用入口。
 ///
@@ -16,6 +18,14 @@ import 'services/mistake_books.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized(); // path_provider 依赖平台通道，必须先初始化绑定
   await AppConfig.init(); // 读配置：有文件就解析，没有就创建，内容进内存
+
+  // 正式包启用插件运行时；widget 测试默认关闭，继续用原生练习页
+  PluginRuntime.enabled = true;
+  try {
+    await PluginManager.ensureBuiltin();
+  } catch (error) {
+    debugPrint('同步内置插件失败：$error');
+  }
 
   runApp(const MainApp()); // 配置就绪后再启动界面
 
@@ -79,14 +89,18 @@ class MainApp extends StatelessWidget {
           return TextStyle(
             fontSize: 11,
             fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
-            color: selected ? colorScheme.primary : colorScheme.onSurfaceVariant,
+            color: selected
+                ? colorScheme.primary
+                : colorScheme.onSurfaceVariant,
           );
         }),
         iconTheme: WidgetStateProperty.resolveWith((states) {
           final selected = states.contains(WidgetState.selected);
           return IconThemeData(
             size: 24,
-            color: selected ? colorScheme.primary : colorScheme.onSurfaceVariant,
+            color: selected
+                ? colorScheme.primary
+                : colorScheme.onSurfaceVariant,
           );
         }),
       ),

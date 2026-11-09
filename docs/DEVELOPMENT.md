@@ -24,9 +24,11 @@
 - 题库管理
   - 右上角 `+` 调起系统目录选择器
   - 多目录**并发扫描**；右上角搜索按钮可按题库名称筛选
-  - 扫描所选目录下的 `.json` 文件，按「父文件夹 → 子文件夹 → 题库」三级展示：
+  - 扫描所选目录下的 `.json`，并向下多看**一层子目录**（跳过 `.` 开头的隐藏目录）；
+    按「父文件夹 → 子文件夹 → 题库」三级展示，子目录里的题库显示为 `子目录/题库名`：
     父文件夹取每个目录引用的上一层（`BankIo.parentOf`），同一父目录下添加的多个子目录归到一组；
     解析不出父级时退化成两级，不重复显示标题
+  - 子目录题库在统计页和错题本里按「根目录名/子目录名」分组；配图、回拷仍指向文件实际所在子目录
   - App 内置 AI 题库支持两级目录（`Question/<主题>/<子主题>`），与用户目录一起按同一规则展示
   - 点击文件进入练习
   - 子文件夹标题右侧的删除按钮只移除 `config.json` 里的目录记录，不会删除目录或题目文件
@@ -134,7 +136,7 @@
 lib/
 ├── main.dart                       # 入口、主题、启动时加载配置
 ├── models/
-│   ├── question_bank.dart          # 题库/题目/选项/统计/题型枚举
+│   ├── question_bank.dart          # 题库/题目/选项/统计/题型枚举 + QuestionCodec 编解码入口
 │   └── question_bank_file.dart     # 题库文件（名称 + 引用 + 所属目录）
 ├── services/
 │   ├── app_config.dart             # config.json 读写、全局 notifier
@@ -156,7 +158,11 @@ lib/
 │   ├── home_page.dart              # 随机背景 + 打卡卡片
 │   ├── question_bank_page.dart     # 目录选择、扫描、题库列表
 │   ├── practice_controller.dart    # 练习状态机（题号/选择/判分/计数/断点）
-│   ├── practice_page.dart          # 练习界面、AI 交互与文件同步
+│   ├── practice_persistence.dart   # 保存/防抖/回拷/断点
+│   ├── practice_ai_service.dart    # AI 判分、AI 解析、题目配图读取
+│   ├── answer_image_picker.dart    # 作答图片选择与压缩（4 张 / 5 MB / 10 MB）
+│   ├── practice_question_view.dart # 单题 UI（题干/选项/输入/结果/解析）
+│   ├── practice_page.dart          # 练习页：加载、状态编排、完成页
 │   ├── mistake_books_page.dart     # 错题本二级页面（先展示再后台收集）
 │   ├── ai_generate_page.dart       # AI 出题页（表单 + 已生成题库列表）
 │   ├── book_ai_generate_page.dart  # 拍书出题页（拍照/相册 → 出题 → 自定义保存位置）
@@ -420,6 +426,30 @@ build/windows/x64/runner/Release/
 `record(correct)` 记录判分，`goTo(index)` 恢复某题状态，`restart()` 从头开始，
 `loadBank(bank, progress)` 换题库并按断点恢复。
 
+### PracticePersistence（`lib/screen/practice_persistence.dart`）
+
+练习页的保存与回拷：400ms 防抖写工作副本、错题本每题回写、完成/后台/离开时
+flush + `syncBack()`，以及断点 `saveProgress` / `clearProgress`。
+页面不再自己管 Timer 和串行队列。
+
+### PracticeAiService（`lib/screen/practice_ai_service.dart`）
+
+练习页的 AI 动作：读题目配图、主观题 `score`、`explain` 解析。
+页面只保留 loading/错误状态和 UI。
+
+### AnswerImagePicker（`lib/screen/answer_image_picker.dart`）
+
+作答图片选择与压缩：最多 4 张、单张 5 MB、合计 10 MB，长边压到 1600。
+校验失败抛 `AnswerImageException`，页面只负责提示。
+
+### QuestionCodec（`lib/models/question_bank.dart`）
+
+题库 JSON 编解码的唯一入口：`bankFromJson` / `bankToJson`、
+`questionFromJson` / `questionToJson`、`statsFromJson` / `statsToJson`、
+`decode(raw)` / `encode(bank)`、`encodeQuestions(questions)`。
+以后加题目字段只改 `QuestionCodec` 和模型字段，不要在多个文件里各写一套
+fromJson / toJson。
+
 ### Saf（`lib/services/saf.dart`）
 
 Android Storage Access Framework 的 Dart 封装，对应原生 `tbank/saf` 通道
@@ -430,7 +460,7 @@ Android Storage Access Framework 的 Dart 封装，对应原生 `tbank/saf` 通�
 | --- | --- |
 | `Saf.isSupported` | 是否 Android；桌面端为 false，走文件路径 |
 | `Saf.pickDirectory()` | 弹系统目录选择器，返回可跨重启的 tree URI；取消返回 null |
-| `Saf.listChildren(uri, extension:)` | 列出目录下的一级文件 |
+| `Saf.listChildren(uri, extension:, recursive:)` | 列出目录下的文件；`recursive` 为 true 时向下扫一层子目录，条目带 `parentUri` / `subDirectory` |
 | `Saf.readText(uri)` / `Saf.writeText(uri, text)` | 读写 UTF-8 文本，写入用 `wt` 模式会截断旧内容 |
 | `Saf.readChildBytes(dirUri, name)` | 按文件名读子文件字节，题目配图用 |
 | `Saf.writeChildText(dirUri, name, text)` | 在目录里新建/覆盖一个 JSON 文本文件（同名覆盖，否则 `createDocument` 新建），返回文档 URI；AI 变式题用 |
@@ -443,7 +473,7 @@ Android Storage Access Framework 的 Dart 封装，对应原生 `tbank/saf` 通�
 
 | 成员 | 说明 |
 | --- | --- |
-| `listJsonFiles(dirRef)` | 列出目录下的 `.json`，两种存储都支持 |
+| `listJsonFiles(dirRef, recursive:)` | 列出目录下的 `.json`；`recursive` 为 true 时额外包含一层子目录，两种存储都支持 |
 | `readText(fileRef)` / `writeText(fileRef, text)` | 读写题库 JSON，读取时自动去掉 BOM |
 | `readSiblingBytes(dirRef, name)` | 读同级文件字节（题目配图） |
 | `writeSiblingText(dirRef, name, text)` | 在目录里新建/覆盖 JSON 文件（SAF 走原生 `createDocument`，桌面直接写路径） |
@@ -744,7 +774,7 @@ kotlin.incremental=false
 - **断点续练不保存未提交的输入**：已提交题目的判分结果会恢复，主观题输入框里还没提交的文字、拍照图片不落盘；题库题目增删或换序后旧进度自动作废；
 - **同一题库练完后再点一次不会自动重开**：`didUpdateWidget` 比较的是路径，路径没变不会重新加载；可以点完成页的“再练一遍”，或给选择加一个序号；
 - **填空/解释的判分依赖 DeepSeek**：配置了 Key 时由 AI 打 0-10 分（低于 6 分判错），未配置或请求失败时退回“答对了 / 答错了”自判；AI 判分有模型波动，同一答案分数可能不完全一致；作答图片最多 4 张、单张 5 MB、合计 10 MB，Android 端会压缩到长边 1600px；
-- **只扫描目录第一层**：需要递归时把 `dir.list(followLinks: false)` 改为 `recursive: true`；
+- **只递归一层子目录**：跳过 `.` 开头的隐藏目录，第二层以下的文件不会自动出现；需要更深时扩展 `BankIo.listJsonFiles` 的递归深度，并同步 Android 原生 `queryChildren` 的 `allowSubdirectories`；
 - **删除目录记录会带走该目录下所有题库**：列表按文件展示，但删除操作移除的是整个目录记录，同一目录里的其它 `.json` 也会一起从列表消失（文件本身不删）；
 - **`Question/` 里的题库在管理页删不掉**：它是 App 内置目录，没有 `config.json` 记录可移除；要彻底删除请到「拍书出题」页底部的「已生成的题库」列表操作（删除不可恢复，错题本里已收集的题目会保留）；
 - **界面状态**：练习状态收在 `PracticeController`，其余页面状态仍由各页 State 持有；没有引入 Provider/Riverpod，跨页面共享只通过 AppConfig 的 notifier（题库列表另有 `BankRepository` 缓存）；
@@ -752,15 +782,207 @@ kotlin.incremental=false
 - **配图高度上限 320px**：超过这个高度的图会被等比缩放到 320 以内，长截图可能看不清；改 `QuestionImage.maxHeight` 即可；
 - **assets 体积**：`assets/images/home_bg/` 的背景图已压缩为 WebP（约 2.8 MB），以后新增图片建议同样压缩后再放入。
 
+## 插件系统
+
+### 目录与清单
+
+插件放在 App 私有目录的 `plugins/<id>/` 下，每个插件根目录必须有 `manifest.json`：
+
+```json
+{
+  "id": "coding",
+  "name": "代码测评",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "types": ["coding"],
+  "typeNames": {"coding": "代码题"},
+  "typeDescriptions": {
+    "coding": "代码题：correctAnswer 放参考代码，analysis 写关键步骤。"
+  },
+  "description": "可选"
+}
+```
+
+`types` 是写入题目 `type` 的标识；`typeNames` 用于出题界面展示；
+`typeDescriptions` 会原样传给 AI 出题服务，App 不再硬编码题型说明。
+老插件没有后两个字段时，App 显示 id 并给通用出题说明。
+
+内置 `standard` 随包发布，启动时由 `PluginManager.ensureBuiltin()` 把
+`assets/plugins/standard/` 下全部资源（manifest、HTML/JS/CSS、KaTeX）同步到
+插件目录；它不可卸载。
+
+### 题库与错题本标记
+
+- 题库 JSON 根节点：`"plugin": "standard"`（省略按 standard 处理）、
+  `"pluginVersion": 1`；
+- 一个题库只能由一个插件处理，题目内部不写 plugin；
+- 错题本根节点同样写 `plugin`，一本只收同一插件的题；同一组下不同插件
+  会各自分本，目录不拆，统计/完成度仍由 App 计算。
+
+### 安装 / 下载 / 卸载
+
+- 设置 → 插件管理：列出插件、导入本地 `.zip`、从网络下载 `.zip`、卸载；
+- zip 内可以根目录直接放 `manifest.json`，也可以套一层 `<id>/`；
+- 校验 id、版本、API 版本、types、zip 路径穿越、大小/文件数；
+- 同名非内置插件覆盖，内置 `standard` 拒绝覆盖和卸载；
+- 卸载不会删除题库/错题本，打开时提示安装对应插件。
+
+### WebView 运行时
+
+`PluginRuntime.enabled` 为 true 时，所有已安装插件的题库改用
+`PluginPracticeView` 加载 `plugins/<id>/index.html`：
+
+- Android：`webview_flutter`（官方 WebView）；
+- Windows：`webview_windows`（WebView2，构建机需要把 `nuget.exe` 放进 PATH）；
+- 内置 `standard` 的 `index.html` / `app.js` / `style.css` / KaTeX 随包发布，
+  启动时复制到插件目录，公式离线渲染；
+
+App 通过统一桥接提供：
+
+| 能力 | 说明 |
+| --- | --- |
+| `window.__tbankReceive(context)` | 注入题目、选项、正确答案、统计、错题本剩余次数、主题色、题目配图 data URL、`pluginData` |
+| `tbankSubmit` | 插件提交 `{correct, selected}`，App 更新统计/错题本 |
+| `tbankUpdatePluginData` | `{pluginData: {...}}`，按题型 schema 校验后写回当前题 |
+| `tbankNext` / `tbankPrevious` | 上一题 / 下一题 |
+| `tbankAiExplain` | 宿主代调 AI 解析，Key 不下发给插件 |
+| `tbankAiScore` | 宿主代调主观题判分，返回 0-10 |
+| `tbankReadBank` | 只读当前题库 JSON |
+| `tbankReadImage` | 读题库目录里的图片，返回 data URL |
+| `tbankFetch` | 宿主代理 http/https 请求（30s、1 MB 上限） |
+| `tbankClipboardRead` / `tbankClipboardWrite` | 剪贴板读写 |
+| `tbankPickImage` | 拍照/相册选图，返回 data URL |
+| `tbankToast` | 插件请求显示宿主 SnackBar |
+
+插件只负责渲染和判分逻辑；App 保留题库加载、统计、持久化、回拷和导航。
+widget 测试默认关闭 `PluginRuntime.enabled`，走原生 `PracticeQuestionView`，
+避免依赖 WebView 平台实现。
+
+### 插件配置
+
+第三方插件可以在根目录放一个固定的 `config.html` 作为配置页；插件管理页
+每个插件右侧的齿轮会打开它。配置数据单独保存在插件根目录的
+`config.json`，不写进 manifest，也不写进题库。
+
+- `config.html`：配置页 UI；
+- `config.json`：App 保存的配置对象；不存在时视为 `{}`；
+- 插件升级时 App 会保留旧 `config.json`，卸载时随插件一起删除。
+
+宿主加载配置页后调用：
+
+```js
+window.__tbankConfigReceive({
+  plugin: { id, name, version, apiVersion, types },
+  config: { /* 当前配置 */ }
+})
+```
+
+配置页通过同一套 Promise 桥调用：
+
+| 接口 | 参数 | 返回 |
+| --- | --- | --- |
+| `tbankConfigGet` | 无 | 当前配置对象 |
+| `tbankConfigSet` | `{config: {...}}` | `true`，写回该插件自己的 `config.json` |
+| `tbankToast` | `{message}` | `true` |
+
+示例 `config.html` 里的桥：
+
+```js
+let seq = 0;
+const pending = new Map();
+function call(name, args = {}) {
+  return new Promise((resolve, reject) => {
+    const id = String(++seq);
+    pending.set(id, { resolve, reject });
+    const text = JSON.stringify({ id, name, args });
+    if (window.TBankChannel) window.TBankChannel.postMessage(text);
+    else window.chrome.webview.postMessage(text);
+  });
+}
+window.__tbankResolve = (id, result) => {
+  const p = pending.get(id); if (p) { pending.delete(id); p.resolve(result); }
+};
+window.__tbankReject = (id, message) => {
+  const p = pending.get(id); if (p) { pending.delete(id); p.reject(new Error(message)); }
+};
+window.__tbankConfigReceive = ({ config }) => {
+  // 用 config 渲染表单
+};
+// 保存：
+// await call('tbankConfigSet', { config: { theme: 'dark' } });
+```
+
+### 插件题型与 AI 出题
+
+AI 出题、拍书出题、变式出题都按插件题型工作：
+
+1. 用户在出题页选择插件，页面只列出该插件 manifest 的 `types`；
+2. App 把用户要求 + 插件 `typeDescriptions` 拼进生成 Prompt；
+3. AI 返回的每道题 `type` 必须是该插件声明的 id；
+4. 写入题库时根节点写 `plugin` / `pluginVersion`，题目保留原始 type；
+5. 变式出题沿用源题库的插件和题型说明，生成文件写回同一个 `plugin`。
+
+所以 App 只负责通用的“生成 JSON 题库”服务，题型语义由插件自己定义。
+`standard` 的四种题型也通过同一套 manifest 元数据工作，没有特殊分支。
+
+### 插件私有题目数据
+
+插件可以在题目里使用 `pluginData` 保存自己的结构，App 不解释、只原样保留：
+
+```json
+{
+  "id": "q1",
+  "type": "coding",
+  "question": "实现函数",
+  "options": [],
+  "correctAnswer": ["..."],
+  "stats": {"attemptCount": 0, "wrongCount": 0},
+  "pluginData": {"language": "dart", "code": "..."}
+}
+```
+
+manifest 可按题型声明 schema/示例：
+
+```json
+{
+  "typeSchemas": {
+    "coding": {
+      "type": "object",
+      "required": ["language", "code"],
+      "properties": {
+        "language": {"type": "string"},
+        "code": {"type": "string"}
+      }
+    }
+  },
+  "typeExamples": {
+    "coding": {"language": "dart", "code": "void main() {}"}
+  }
+}
+```
+
+- 生成时 App 把 schema/示例一起给 AI；返回后用
+  `PluginSchemaValidator` 校验，坏题丢弃并要求按题型重试；
+- 生成按题型配额进行，每个已选题型至少 1 道，不足立即重试（默认每题型
+  最多 4 次），全部覆盖后才落盘；
+- 练习时插件上下文带 `question.pluginData`，可调用
+  `tbankUpdatePluginData({pluginData: {...}})` 修改当前题私有数据；
+- App 会按当前题型 schema 校验修改结果，通过后写回题库工作副本；
+- 支持的关键字：type / required / properties / additionalProperties /
+  items / enum / const / allOf / anyOf / oneOf / minLength / maxLength /
+  minimum / maximum / minItems / maxItems / pattern；不支持 `$ref`。
+
 ## 开发约定
 
 - 页面里尽量使用 `Theme.of(context).colorScheme`，不要把颜色写死；
 - 异步操作之后使用 `context` 或 `setState` 前先检查 `mounted`；
 - 题库文件读写统一走 `QuestionBankStorage`，不要在页面里直接 `File` 操作；
+- 题库 JSON 的解析/序列化统一走 `QuestionCodec`，不要在页面或服务里另写一套；
 - 题库目录扫描统一走 `BankRepository`，不要在页面里重复列目录；
 - 配置读写统一走 `AppConfig`，不要绕过它直接改 `config.json`；
 - 每道题的统计更新统一走 `_recordAnswer`，避免重复计数；
-- 练习状态和状态迁移优先放进 `PracticeController`，页面只做渲染与 AI 交互；
+- 练习状态和状态迁移优先放进 `PracticeController`，保存/回拷放
+  `PracticePersistence`，AI 动作放 `PracticeAiService`，页面只做渲染与编排；
 - 提交前跑 `flutter analyze` 和 `flutter test`；CI（`.github/workflows/flutter.yml`）用同样两条命令；
 - `analysis_options.yaml` 开启了 `strict-casts` / `strict-inference` / `strict-raw-types`，
   解析 JSON 时要显式判断类型，不要依赖隐式转换；

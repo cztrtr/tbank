@@ -251,9 +251,16 @@ ${studentAnswer.isEmpty ? '' : '\n学生作答：$studentAnswer'}
     required String requirements,
     required List<String> types,
     required int count,
+    String? typeSpec,
   }) async {
     final String typeList = types.join('、');
     final int safeCount = count < 1 ? 1 : count;
+    final String typeBlock = typeSpec == null
+        ? '题型：$typeList'
+        : '题型与说明：\n$typeSpec';
+    final String rules = typeSpec == null
+        ? _questionFormatRules(safeCount)
+        : _pluginQuestionFormatRules(safeCount);
 
     final String prompt =
         '''
@@ -261,9 +268,9 @@ ${studentAnswer.isEmpty ? '' : '\n学生作答：$studentAnswer'}
 
 主题：$topic
 要求：$requirements
-题型：$typeList
+$typeBlock
 
-${_questionFormatRules(safeCount)}
+$rules
 ''';
 
     return _send(
@@ -312,9 +319,16 @@ $questionsText
     required List<String> knowledgePoints,
     required List<String> types,
     required int count,
+    String? typeSpec,
   }) async {
     final String typeList = types.join('、');
     final int safeCount = count < 1 ? 1 : count;
+    final String typeBlock = typeSpec == null
+        ? '题型：$typeList'
+        : '题型与说明：\n$typeSpec';
+    final String rules = typeSpec == null
+        ? _questionFormatRules(safeCount)
+        : _pluginQuestionFormatRules(safeCount);
     final String points = knowledgePoints
         .map((String point) => '- $point')
         .join('\n');
@@ -328,11 +342,11 @@ $questionsText
 $points
 
 出题要求：
-- 共生成 $safeCount 道题，尽量覆盖上面每一个知识点，重要知识点可以出 1~2 道；
+- 共生成 $safeCount 道题，覆盖上面每一个知识点，重要知识点可以出 2~3 道；
 - 必须是与原题库不同角度的新题：换情景、换数据、换问法，不能照抄原题；
-- 题型：$typeList。
+$typeBlock
 
-${_questionFormatRules(safeCount)}
+$rules
 ''';
 
     return _send(
@@ -355,6 +369,7 @@ ${_questionFormatRules(safeCount)}
     required String requirements,
     required List<String> types,
     required int count,
+    String? typeSpec,
   }) async {
     final List<Uint8List> valid = images
         .where((Uint8List bytes) => bytes.isNotEmpty)
@@ -365,6 +380,12 @@ ${_questionFormatRules(safeCount)}
 
     final String typeList = types.join('、');
     final int safeCount = count < 1 ? 1 : count;
+    final String typeBlock = typeSpec == null
+        ? '题型：$typeList'
+        : '题型与说明：\n$typeSpec';
+    final String rules = typeSpec == null
+        ? _questionFormatRules(safeCount)
+        : _pluginQuestionFormatRules(safeCount);
     final String requirementText = requirements.trim().isEmpty
         ? '（未填写，围绕图片内容出题即可）'
         : requirements.trim();
@@ -379,12 +400,12 @@ ${_questionFormatRules(safeCount)}
 出题要求：
 - 共生成 $safeCount 道题；
 - 图片里是题目：优先模仿图片中题目的题型、难度和考点，出同类型的新题
-  （换数字、换情景），不要照抄原图；
-- 图片里是知识点讲解：围绕图中的知识点出题，尽量覆盖图中所有考点；
+  （换数字、换情景），不要照抄原图（用户特别要求的除外）；
+- 图片里是知识点讲解：围绕图中的知识点出题，覆盖图中所有考点；
 - 用户的具体要求与图片内容冲突时，以用户要求为准；
-- 题型：$typeList。
+$typeBlock
 
-${_questionFormatRules(safeCount)}
+$rules
 ''';
 
     return _send(
@@ -470,6 +491,35 @@ ${_questionFormatRules(safeCount)}
    （例如写 \$\\frac{1}{2}\$ 而不是 \\frac{1}{2}），公式里不要夹中文；
 7. 解析要说明正确答案为什么对、其它选项为什么错；主观题（填空/名词解释/解答/证明）
    在解析里写清得分要点或关键步骤，简洁准确。
+''';
+  }
+
+  /// 插件题型模式的通用输出协议。
+  ///
+  /// App 不硬编码具体题型结构，结构由插件在 `typeDescriptions` 里说明；
+  /// 这里只固定题库 JSON 的外壳和通用字段。
+  static String _pluginQuestionFormatRules(int count) {
+    final int safeCount = count < 1 ? 1 : count;
+    return '''
+输出要求：
+1. 只输出一个 JSON 对象，不要任何解释文字，不要 Markdown 代码围栏；
+2. JSON 结构如下（questions 数组，共 $safeCount 道题，按 Q001 起顺序编号）：
+{"questions":[
+  {"id":"Q001","type":"题型标识","question":"题干","image":"",
+   "options":[{"key":"A","text":"选项"}],
+   "correctAnswer":["答案"],"analysis":"解析",
+   "pluginData":{},
+   "stats":{"attemptCount":0,"wrongCount":0}}
+]}
+3. 每道题的 type 必须使用「题型与说明」里列出的题型标识，不得自造标识；
+4. options 可以是空数组；不为空时使用 [{"key":"A","text":"..."}] 结构；
+5. correctAnswer 必须是字符串数组；选择题填选项 key，主观题填答案文本；
+6. 题型的具体结构、选项数量、答案形式以插件的题型说明为准；
+7. 如果题型说明里给了 pluginData 的 JSON Schema 或示例，必须输出符合它的
+   pluginData 对象；没有 pluginData 要求的题型可以省略该字段；
+8. 题干和解析中的数学表达式用 LaTeX 书写：行内用 \$...\$，独立公式用 \$\$...\$\$；
+   每个公式都必须完整包在 \$...\$ 内，禁止裸写 \\\\frac、\\\\sqrt 等命令；
+9. 解析要说明正确答案为什么对；主观题写清得分要点或关键步骤，简洁准确。
 ''';
   }
 

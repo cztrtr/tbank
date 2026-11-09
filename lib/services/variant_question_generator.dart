@@ -16,6 +16,7 @@ import '../models/question_bank_file.dart';
 import 'ai_question_generator.dart';
 import 'bank_io.dart';
 import 'ds_api_service.dart';
+import 'plugin_manager.dart';
 
 /// 变式出题的当前阶段。
 enum VariantStage { reading, extracting, generating, saving }
@@ -214,6 +215,7 @@ class VariantQuestionGenerator {
   static Future<VariantResult> generate({
     required QuestionBankFile source,
     required QuestionBank sourceBank,
+    required PluginManifest plugin,
     required int count,
     required List<String> types,
     void Function(VariantProgress progress)? onProgress,
@@ -226,6 +228,10 @@ class VariantQuestionGenerator {
     }
 
     final int target = count.clamp(1, maxCount);
+    final Set<String> selectedIds = types.toSet();
+    final List<PluginTypeInfo> selectedTypes = plugin.typeInfos
+        .where((PluginTypeInfo type) => selectedIds.contains(type.id))
+        .toList();
 
     // ---- 1. 归纳知识点 ----
     onProgress?.call(const VariantProgress(stage: VariantStage.extracting));
@@ -242,50 +248,34 @@ class VariantQuestionGenerator {
       ),
     );
 
-    // ---- 2. 分批生成 ----
-    final List<Map<String, dynamic>> questions = <Map<String, dynamic>>[];
-    int batchIndex = 0;
-
-    while (questions.length < target && batchIndex < maxBatches) {
-      final int remaining = target - questions.length;
-      final int batchCount = remaining > perBook ? perBook : remaining;
-      batchIndex++;
-
-      final String raw = await DsApiService.generateQuestionsFromKnowledge(
-        topic: source.displayName,
-        knowledgePoints: knowledgePoints,
-        types: types,
-        count: batchCount,
-      );
-
-      final List<Map<String, dynamic>> parsed =
-          AiQuestionGenerator.parseQuestions(raw);
-      if (parsed.isEmpty) {
-        if (questions.isEmpty) {
-          throw DsApiException('AI 返回的题目格式不正确，请重试');
-        }
-        break; // 后续批次失败：保留已生成的部分
-      }
-
-      // AI 可能多给，按本批需求截断
-      final List<Map<String, dynamic>> batch = parsed.length > batchCount
-          ? parsed.sublist(0, batchCount)
-          : parsed;
-      questions.addAll(batch);
-
-      onProgress?.call(
-        VariantProgress(
-          stage: VariantStage.generating,
-          finished: questions.length,
-          total: target,
-          knowledgePoints: knowledgePoints,
-        ),
-      );
-    }
-
-    if (questions.isEmpty) {
-      throw DsApiException('AI 没有生成任何可用题目，请重试');
-    }
+    // ---- 2. 按题型配额生成；不足时立即重试，确保覆盖 ----
+    final List<Map<String, dynamic>> questions =
+        await AiQuestionGenerator.generateWithCoverage(
+          plugin: plugin,
+          types: selectedTypes,
+          target: target,
+          request: (PluginTypeInfo type, int count) {
+            return DsApiService.generateQuestionsFromKnowledge(
+              topic: source.displayName,
+              knowledgePoints: knowledgePoints,
+              types: <String>[type.id],
+              count: count,
+              typeSpec: AiQuestionGenerator.buildTypeSpec(<PluginTypeInfo>[
+                type,
+              ]),
+            );
+          },
+          onProgress: (int finished, int total) {
+            onProgress?.call(
+              VariantProgress(
+                stage: VariantStage.generating,
+                finished: finished,
+                total: total,
+                knowledgePoints: knowledgePoints,
+              ),
+            );
+          },
+        );
 
     // 全局连续编号，保证与题库格式一致
     for (int i = 0; i < questions.length; i++) {
@@ -303,8 +293,12 @@ class VariantQuestionGenerator {
     );
 
     final String fileName = await nextFileName(source);
-    final String content = const JsonEncoder.withIndent('  ')
-        .convert(<String, dynamic>{'questions': questions});
+    final Map<String, dynamic> json = <String, dynamic>{
+      'plugin': plugin.id,
+      'pluginVersion': plugin.apiVersion,
+      'questions': questions,
+    };
+    final String content = const JsonEncoder.withIndent('  ').convert(json);
     await BankIo.writeSiblingText(source.directoryRef, fileName, content);
 
     return VariantResult(
@@ -328,7 +322,10 @@ class VariantQuestionGenerator {
 
     for (int i = 0; i < sampled.length; i++) {
       final Question question = sampled[i];
-      buffer.writeln('【第 ${i + 1} 题】题型：${typeLabel(question.type)}');
+      final String typeText = question.typeId == question.type.value
+          ? typeLabel(question.type)
+          : question.typeId;
+      buffer.writeln('【第 ${i + 1} 题】题型：$typeText');
       buffer.writeln('题干：${_clip(question.question, _maxQuestionChars)}');
       if (question.options.isNotEmpty) {
         final String options = question.options

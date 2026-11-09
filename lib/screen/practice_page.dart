@@ -7,19 +7,22 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
 
 import '../models/question_bank.dart';
 import '../models/question_bank_file.dart';
 import '../services/app_config.dart';
-import '../services/bank_io.dart';
 import '../services/ds_api_service.dart';
 import '../services/mistake_books.dart';
+import '../services/plugin_manager.dart';
 import '../services/practice_progress.dart';
 import '../services/question_bank_storage.dart';
-import '../widgets/math_text.dart';
-import '../widgets/question_image.dart';
+import 'answer_image_picker.dart';
+import 'practice_ai_service.dart';
 import 'practice_controller.dart';
+import 'practice_persistence.dart';
+import 'practice_question_view.dart';
+import 'plugin_practice_view.dart';
+import '../services/plugin_runtime.dart';
 
 /// 练习页：加载题库、逐题作答、更新统计并回写文件。
 ///
@@ -39,8 +42,17 @@ class PracticePage extends StatefulWidget {
 
 class _PracticePageState extends State<PracticePage>
     with WidgetsBindingObserver {
-  QuestionBankStorage? _storage; // 当前题库的文件读写器
+  /// 保存/回拷/断点都交给它，页面不再自己管计时器和串行队列。
+  PracticePersistence? _persistence;
+
+  QuestionBankStorage? get _storage => _persistence?.storage;
   QuestionBank? _questions; // 已读进内存的题库
+
+  /// 当前题库使用的插件 id；standard 走内置 WebView 插件。
+  String _pluginId = PluginManager.builtinId;
+
+  /// 当前插件清单，用于校验插件私有数据和取 schema。
+  PluginManifest? _pluginManifest;
 
   bool _loading = false; // 是否正在加载题库
   String? _error; // 加载失败的提示
@@ -73,21 +85,11 @@ class _PracticePageState extends State<PracticePage>
   /// 学生拍照 / 上传的作答图片；AI 判分时会和文字答案一起发送。
   final List<Uint8List> _answerImages = <Uint8List>[];
 
-  static const int _maxAnswerImages = 4; // 一次作答最多几张图
-  static const int _maxAnswerImageBytes = 5 * 1024 * 1024; // 单张 5 MB 上限
-  static const int _maxTotalAnswerBytes = 10 * 1024 * 1024; // 合计 10 MB 上限
   bool get _finished => _controller.finished;
   set _finished(bool value) => _controller.finished = value;
   int get _answeredCount => _controller.answeredCount;
   int get _correctCount => _controller.correctCount;
   String? _syncMessage; // 回拷源文件的状态提示
-
-  /// 保存防抖：答题后 400ms 内连续操作只写一次工作副本。
-  ///
-  /// 切题、完成、进后台、页面销毁时都会立即 flush，不会把最后一次改动落下。
-  Timer? _persistTimer;
-  bool _persistPending = false;
-  static const Duration _persistDebounce = Duration(milliseconds: 400);
 
   int _loadToken = 0; // 加载序号，防止旧加载覆盖新加载
 
@@ -130,12 +132,12 @@ class _PracticePageState extends State<PracticePage>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _answerController.dispose();
-    _persistTimer?.cancel();
 
     // 页面销毁时先保存断点和待写副本，再尝试同步
     unawaited(_saveProgress());
     unawaited(_flushPersist());
     unawaited(_syncBack());
+    _persistence?.dispose();
     super.dispose();
   }
 
@@ -159,7 +161,7 @@ class _PracticePageState extends State<PracticePage>
       // 进入加载态，清空上一份题库的界面状态
       _loading = true;
       _error = null;
-      _storage = null;
+      _persistence = null;
       _questions = null;
       _syncMessage = null;
       // 换题库时先换一个空状态机；加载完成后再用新题库和断点初始化
@@ -174,17 +176,42 @@ class _PracticePageState extends State<PracticePage>
       // 页面已销毁，或又开始了新的加载：丢弃这次结果
       if (!mounted || token != _loadToken) return;
 
+      // 一个题库只由一个插件处理；插件没装就提示，装了就走 WebView 宿主
+      final String pluginId = bank.effectivePlugin;
+      _pluginId = pluginId;
+      if (pluginId != PluginManager.builtinId &&
+          !await PluginManager.isInstalled(pluginId)) {
+        if (!mounted || token != _loadToken) return;
+        setState(() {
+          _loading = false;
+          _error = '这个题库需要插件「$pluginId」，请到 设置 → 插件管理 安装';
+        });
+        return;
+      }
+
+      final PluginManifest? manifest = pluginId == PluginManager.builtinId
+          ? null
+          : await _findPluginManifest(pluginId);
+
       // 断点续练：题目 id 顺序完全一致才恢复，避免判分结果对错题
-      final List<String> questionIds =
-          bank.questions.map((Question question) => question.id).toList();
-      final PracticeProgress? progress =
-          await PracticeProgress.load(file, questionIds);
+      final List<String> questionIds = bank.questions
+          .map((Question question) => question.id)
+          .toList();
+      final PracticeProgress? progress = await PracticeProgress.load(
+        file,
+        questionIds,
+      );
 
       if (!mounted || token != _loadToken) return;
 
+      // 旧 persistence 的待保存内容已经在方法开头 flush 过了
+      _persistence?.dispose();
+      final persistence = PracticePersistence(file: file)..bind(storage);
+
       setState(() {
-        _storage = storage;
+        _persistence = persistence;
         _questions = bank;
+        _pluginManifest = manifest;
         _loading = false;
         // 上次没回拷成功时，完成页也能看到提示
         _syncMessage = storage.pendingSyncWarning;
@@ -213,6 +240,16 @@ class _PracticePageState extends State<PracticePage>
         _loading = false;
         _error = '读取题库失败：$error';
       });
+    }
+  }
+
+  /// 读取插件清单；失败时不影响练习页加载。
+  Future<PluginManifest?> _findPluginManifest(String id) async {
+    try {
+      return await PluginManager.find(id);
+    } catch (error) {
+      debugPrint('读取插件清单失败：$id $error');
+      return null;
     }
   }
 
@@ -271,26 +308,11 @@ class _PracticePageState extends State<PracticePage>
 
     setState(() => _grading = true);
     try {
-      // 题目有配图就一起发给 AI；读不到图时降级为纯文本判分
-      Uint8List? imageBytes;
-      final QuestionBankStorage? storage = _storage;
-      if (question.hasImage && storage != null) {
-        try {
-          imageBytes = await BankIo.readSiblingBytes(
-            storage.sourceDirectoryRef,
-            question.image,
-          );
-        } catch (error) {
-          debugPrint('读取题目配图失败，改按纯文本判分：$error');
-        }
-      }
-
-      final int score = await DsApiService.scoreAnswer(
-        question: question.question,
-        standardAnswer: question.correctAnswers.join('\n'),
-        userAnswer: answer,
-        imageBytes: imageBytes,
+      final int score = await PracticeAiService.score(
+        question,
+        answer: answer,
         answerImages: _answerImages,
+        sourceDirectoryRef: _storage?.sourceDirectoryRef,
       );
       if (!mounted) return;
 
@@ -308,14 +330,14 @@ class _PracticePageState extends State<PracticePage>
 
   /// 选择作答图片：Android 支持拍照或相册，桌面端直接打开文件选择器。
   Future<void> _pickAnswerImage() async {
-    if (_answerImages.length >= _maxAnswerImages) {
-      _toast('最多上传 $_maxAnswerImages 张作答图片');
+    if (_answerImages.length >= AnswerImagePicker.maxImages) {
+      _toast('最多上传 ${AnswerImagePicker.maxImages} 张作答图片');
       return;
     }
 
     final bool isAndroid = defaultTargetPlatform == TargetPlatform.android;
-    final ImageSource? source = isAndroid
-        ? await showModalBottomSheet<ImageSource>(
+    final AnswerImageSource? source = isAndroid
+        ? await showModalBottomSheet<AnswerImageSource>(
             context: context,
             builder: (BuildContext sheetContext) => SafeArea(
               child: Column(
@@ -325,94 +347,42 @@ class _PracticePageState extends State<PracticePage>
                     leading: const Icon(Icons.photo_camera_outlined),
                     title: const Text('拍照'),
                     onTap: () =>
-                        Navigator.pop(sheetContext, ImageSource.camera),
+                        Navigator.pop(sheetContext, AnswerImageSource.camera),
                   ),
                   ListTile(
                     leading: const Icon(Icons.photo_library_outlined),
                     title: const Text('从相册选择'),
                     onTap: () =>
-                        Navigator.pop(sheetContext, ImageSource.gallery),
+                        Navigator.pop(sheetContext, AnswerImageSource.gallery),
                   ),
                 ],
               ),
             ),
           )
-        : ImageSource.gallery;
+        : AnswerImageSource.gallery;
 
     if (!mounted || source == null) return;
 
     try {
-      final XFile? picked = await ImagePicker().pickImage(
-        source: source,
-        maxWidth: 1600, // 压缩到长边 1600，控制 base64 后的请求体积
-        imageQuality: 85,
-      );
-      if (picked == null) return;
+      final Uint8List? bytes = await AnswerImagePicker.pick(source);
+      if (!mounted || bytes == null) return;
 
-      final Uint8List bytes = await picked.readAsBytes();
-      if (!mounted || bytes.isEmpty) return;
-      if (bytes.length > _maxAnswerImageBytes) {
-        _toast('图片太大了（超过 5 MB），请换一张');
-        return;
-      }
       final int totalBytes =
           _answerImages.fold<int>(
             0,
-            (int sum, Uint8List bytes) => sum + bytes.length,
+            (int sum, Uint8List existing) => sum + existing.length,
           ) +
           bytes.length;
-      if (totalBytes > _maxTotalAnswerBytes) {
+      if (totalBytes > AnswerImagePicker.maxTotalBytes) {
         _toast('作答图片合计超过 10 MB，请删掉几张再试');
         return;
       }
       setState(() => _answerImages.add(bytes));
+    } on AnswerImageException catch (error) {
+      if (mounted) _toast(error.message);
     } catch (error) {
-      if (!mounted) return;
-      _toast('选择图片失败：$error');
+      if (mounted) _toast('选择图片失败：$error');
     }
-  }
-
-  /// 已选作答图片的缩略图，右上角叉号可单张移除。
-  Widget _buildAnswerImages() {
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      children: <Widget>[
-        for (int i = 0; i < _answerImages.length; i++)
-          Stack(
-            children: <Widget>[
-              ClipRRect(
-                borderRadius: BorderRadius.circular(10),
-                child: Image.memory(
-                  _answerImages[i],
-                  width: 84,
-                  height: 84,
-                  fit: BoxFit.cover,
-                ),
-              ),
-              Positioned(
-                top: 0,
-                right: 0,
-                child: GestureDetector(
-                  onTap: () => setState(() => _answerImages.removeAt(i)),
-                  child: Container(
-                    padding: const EdgeInsets.all(2),
-                    decoration: const BoxDecoration(
-                      color: Colors.black54,
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(
-                      Icons.close,
-                      size: 15,
-                      color: Colors.white,
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-      ],
-    );
   }
 
   void _toast(String message) {
@@ -433,32 +403,15 @@ class _PracticePageState extends State<PracticePage>
     });
 
     try {
-      // 题目有配图就一起发，读不到则忽略图片
-      Uint8List? imageBytes;
-      final QuestionBankStorage? storage = _storage;
-      if (question.hasImage && storage != null) {
-        try {
-          imageBytes = await BankIo.readSiblingBytes(
-            storage.sourceDirectoryRef,
-            question.image,
-          );
-        } catch (error) {
-          debugPrint('读取题目配图失败，AI 解析将忽略图片：$error');
-        }
-      }
-
-      final String text = await DsApiService.explainQuestion(
-        question: question.question,
-        options: question.options
-            .map((QuestionOption option) => '${option.key}. ${option.text}')
-            .join('\n'),
+      final String text = await PracticeAiService.explain(
+        question,
         correctAnswer: _answerText(question),
         // 主观题把作答也带上，AI 才能指出错在哪；判分后输入区收起但内容还在
         userAnswer: question.isFillBlank ? _answerController.text : null,
-        imageBytes: imageBytes,
         answerImages: question.isFillBlank
             ? _answerImages
             : const <Uint8List>[],
+        sourceDirectoryRef: _storage?.sourceDirectoryRef,
       );
 
       if (!mounted) return;
@@ -471,80 +424,32 @@ class _PracticePageState extends State<PracticePage>
     }
   }
 
-  /// 安排一次防抖保存；已有待保存任务时只重置计时器。
+  /// 安排一次防抖保存（防抖和串行写盘在 PracticePersistence 里）。
   void _schedulePersist() {
-    _persistPending = true;
-    _persistTimer?.cancel();
-    _persistTimer = Timer(_persistDebounce, () {
-      _persistTimer = null;
-      unawaited(_flushPersist());
-    });
+    final bank = _questions;
+    if (bank != null) _persistence?.scheduleSave(bank);
   }
 
   /// 立即把待保存内容写进工作副本；没有待保存任务时直接返回。
-  Future<void> _flushPersist() async {
-    _persistTimer?.cancel();
-    _persistTimer = null;
-    if (!_persistPending) return;
-    _persistPending = false;
-    await _persist();
-  }
-
-  /// 把当前题库写回文档目录下的工作副本。
-  ///
-  /// 每题判分后调用；实际写入由 QuestionBankStorage 的串行队列保证顺序。
-  Future<void> _persist() async {
-    final storage = _storage;
-    final bank = _questions;
-    if (storage == null || bank == null) return;
-
-    try {
-      await storage.save(bank);
-
-      // 错题本的源文件就在 App 私有目录，写入成本极低：
-      // 每题都把工作副本回写到源文件，避免退回列表时读到还没同步的旧数据。
-      // （普通题库不这样做：源文件在用户目录里，频繁写代价高）
-      if (bank.questions.any((Question q) => q.isFromMistakeBook)) {
-        await storage.syncBack();
-      }
-    } catch (error) {
-      debugPrint('保存工作副本失败：$error');
-    }
-  }
+  Future<void> _flushPersist() => _persistence?.flush() ?? Future<void>.value();
 
   /// 把工作副本回拷到题库文件夹。
-  Future<bool> _syncBack() async {
-    final storage = _storage;
-    if (storage == null) return false;
-
-    try {
-      return await storage.syncBack();
-    } catch (error) {
-      debugPrint('同步回题库文件夹失败：$error');
-      return false;
-    }
-  }
+  Future<bool> _syncBack() =>
+      _persistence?.syncBack() ?? Future<bool>.value(false);
 
   /// 保存断点：题目 id 顺序、当前题号、本次计数和已答结果。
   ///
   /// 整套做完后由调用方清除；题库还没加载完时什么都不做。
   Future<void> _saveProgress() async {
-    final QuestionBankFile? file = widget.bank;
     final QuestionBank? bank = _questions;
-    if (file == null || bank == null || _finished) return;
+    if (bank == null || _finished) return;
 
-    await PracticeProgress.save(
-      file,
-      PracticeProgress(
-        index: _index,
-        answeredCount: _answeredCount,
-        correctCount: _correctCount,
-        answers: Map<int, ({bool correct, Set<String> selected})>.of(
-          _answeredStates,
-        ),
-        questionIds:
-            bank.questions.map((Question question) => question.id).toList(),
-      ),
+    await _persistence?.saveProgress(
+      bank: bank,
+      index: _index,
+      answeredCount: _answeredCount,
+      correctCount: _correctCount,
+      answers: _answeredStates,
     );
   }
 
@@ -635,7 +540,7 @@ class _PracticePageState extends State<PracticePage>
   Widget build(BuildContext context) {
     final bank = widget.bank;
 
-    // 标题用题库展示名（去掉 .json），方便确认当前练的是哪一份。
+    // 标题用题库展示名（子目录题库带「子目录/」前缀），方便确认当前是哪一份。
     return Scaffold(
       appBar: AppBar(title: Text(bank?.displayName ?? '练习')),
       body: _buildBody(bank),
@@ -680,532 +585,124 @@ class _PracticePageState extends State<PracticePage>
     return _buildQuestion(bank, bank.questions[_index]);
   }
 
-  /// 单题界面：题号、进度、题干、作答区、下一题按钮、判分结果。
+  /// 单题界面：standard 和第三方插件都走 WebView 宿主；测试/关闭运行时走原生视图。
   Widget _buildQuestion(QuestionBank bank, Question question) {
-    final total = bank.questions.length;
-    final colorScheme = Theme.of(context).colorScheme;
+    if (PluginRuntime.enabled) {
+      return PluginPracticeView(
+        pluginId: _pluginId,
+        question: question,
+        index: _index,
+        total: bank.questions.length,
+        answered: _answered,
+        wasCorrect: _wasCorrect,
+        selected: _selected,
+        mistakeScore: question.mistakeScore,
+        isMistakeDone: question.isMistakeDone,
+        aiEnabled: !_aiFallback && (AppConfig.dsApiKey ?? '').trim().isNotEmpty,
+        correctAnswerText: _answerText(question),
+        sourceDirectoryRef: _storage?.sourceDirectoryRef,
+        bankFile: widget.bank,
+        plugin: _pluginManifest,
+        onSubmit: (bool correct, Set<String> selected) {
+          setState(() {
+            _selected
+              ..clear()
+              ..addAll(selected);
+          });
+          _recordAnswer(correct);
+        },
+        onNext: _next,
+        onPrevious: _previous,
+        onRequestAiExplain: (String answer) async {
+          if ((AppConfig.dsApiKey ?? '').trim().isEmpty) {
+            return '未配置 DeepSeek API Key，请先到设置里填写。';
+          }
+          try {
+            return await PracticeAiService.explain(
+              question,
+              correctAnswer: _answerText(question),
+              userAnswer: answer,
+              answerImages: const <Uint8List>[],
+              sourceDirectoryRef: _storage?.sourceDirectoryRef,
+            );
+          } on DsApiException catch (error) {
+            return 'AI 解析失败：${error.message}';
+          } catch (error) {
+            return 'AI 解析失败：$error';
+          }
+        },
+        onRequestAiScore: (String answer, List<Uint8List> images) async {
+          if ((AppConfig.dsApiKey ?? '').trim().isEmpty) {
+            throw DsApiException('未配置 DeepSeek API Key');
+          }
+          return PracticeAiService.score(
+            question,
+            answer: answer,
+            answerImages: images,
+            sourceDirectoryRef: _storage?.sourceDirectoryRef,
+          );
+        },
+        onUpdatePluginData: (Map<String, dynamic> data) async {
+          final QuestionBank? bank = _questions;
+          if (bank == null || _index >= bank.questions.length) return;
+          final Question current = bank.questions[_index];
+          setState(() {
+            current.pluginData = Map<String, dynamic>.from(data);
+          });
+          _schedulePersist();
+          await _flushPersist();
+        },
+      );
+    }
 
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
-      children: <Widget>[
-        Row(
-          children: <Widget>[
-            Text('第 ${_index + 1} / $total 题'),
-            const Spacer(),
-            _TypeBadge(type: question.type),
-          ],
-        ),
-        const SizedBox(height: 10),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(99),
-          child: LinearProgressIndicator(
-            value: (_index + 1) / total,
-            minHeight: 6,
-          ),
-        ),
-        const SizedBox(height: 14),
-        // 题干上方的累计统计；判分后 setState 会立即刷新成最新值
-        Row(
-          children: <Widget>[
-            Icon(
-              Icons.query_stats,
-              size: 16,
-              color: colorScheme.onSurfaceVariant,
-            ),
-            const SizedBox(width: 6),
-            Expanded(
-              child: Text(
-                '本题已作答 ${question.stats.attemptCount} 次 · 答错 ${question.stats.wrongCount} 次',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 18),
-        MathText(
-          question.question,
-          style: Theme.of(context).textTheme.titleMedium
-              ?.copyWith(height: 1.5, fontWeight: FontWeight.w600),
-        ),
-        const SizedBox(height: 20),
-
-        // 填空/解释走“展示答案 + 自己判断”，其余题型走选项。
-        // 配图位置按题型区分：选择题放在选项下方，填空/解释题紧跟题干。
-        if (question.isFillBlank) ...<Widget>[
-          _buildQuestionImage(question),
-          ..._buildFillBlank(question),
-        ] else ...<Widget>[
-          ..._buildChoices(question),
-          _buildQuestionImage(question),
-        ],
-
-        if (_answered) ...<Widget>[
-          // 已判分：底部「下一题」占满一行
-          const SizedBox(height: 16),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton(
-              onPressed: _next,
-              child: Text(_index + 1 >= total ? '完成练习' : '下一题'),
-            ),
-          ),
-          // AI 解析按钮紧贴判分结果上方，保证一定在视口里
-          const SizedBox(height: 12),
-          ..._buildAiAnalysisEntry(question),
-          const SizedBox(height: 16),
-          _buildResult(question),
-          if (question.hasAnalysis) ...<Widget>[
-            const SizedBox(height: 12),
-            _buildAnalysis(question),
-          ],
-        ] else if (!question.isFillBlank) ...<Widget>[
-          // 未判分的选择题：左边「上一题」，右边「提交答案」
-          const SizedBox(height: 16),
-          Row(
-            children: <Widget>[
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: _index > 0 ? _previous : null,
-                  child: const Text('上一题'),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: FilledButton(
-                  onPressed: _selected.isEmpty ? null : _submitChoice,
-                  child: const Text('提交答案'),
-                ),
-              ),
-            ],
-          ),
-        ],
-
-        // 主观题「展示答案」之后就能问 AI，不必先自判对错
-        if (!_answered && question.isFillBlank && _showAnswer) ...<Widget>[
-          const SizedBox(height: 12),
-          ..._buildAiAnalysisEntry(question),
-        ],
-      ],
+    return PracticeQuestionView(
+      question: question,
+      index: _index,
+      total: bank.questions.length,
+      selected: _selected,
+      answered: _answered,
+      wasCorrect: _wasCorrect,
+      showAnswer: _showAnswer,
+      grading: _grading,
+      aiEnabled: !_aiFallback && (AppConfig.dsApiKey ?? '').trim().isNotEmpty,
+      aiScore: _aiScore,
+      aiAnalysisLoading: _aiAnalysisLoading,
+      aiAnalysis: _aiAnalysis,
+      aiAnalysisError: _aiAnalysisError,
+      answerController: _answerController,
+      answerImages: _answerImages,
+      correctAnswerText: _answerText(question),
+      sourceDirectoryRef: _storage?.sourceDirectoryRef,
+      onSelectOption: _selectOption,
+      onSubmitChoice: _submitChoice,
+      onSubmitAi: () => _submitWithAi(question),
+      onShowAnswer: () => setState(() => _showAnswer = true),
+      onSelfJudge: _recordAnswer,
+      onAnswerChanged: () => setState(() {}),
+      onPickImage: _pickAnswerImage,
+      onRemoveImage: (int index) =>
+          setState(() => _answerImages.removeAt(index)),
+      onRequestAiAnalysis: () => _requestAiAnalysis(question),
+      onNext: _next,
+      onPrevious: _previous,
     );
   }
 
-  /// 题目配图；没有配图时返回零尺寸组件，不占任何布局空间。
-  ///
-  /// 路径基准是「源 JSON 所在目录」而不是工作副本目录：
-  /// 文档目录里的副本只有一个 JSON，图片仍在题库文件夹里。
-  Widget _buildQuestionImage(Question question) {
-    if (!question.hasImage) {
-      return const SizedBox.shrink();
-    }
+  /// 选择题点选：多选切换，单选/判断只留一个。
+  void _selectOption(String key) {
+    final bank = _questions;
+    if (bank == null) return;
+    final question = bank.questions[_index];
 
-    return QuestionImage(
-      fileName: question.image,
-      directoryRef: _storage?.sourceDirectoryRef,
-    );
-  }
-
-  /// 选择题选项；多选可切换，单选和判断只能留一个。
-  List<Widget> _buildChoices(Question question) {
-    return <Widget>[
-      for (final option in question.options)
-        Padding(
-          padding: const EdgeInsets.only(bottom: 10),
-          child: _OptionButton(
-            option: option,
-            selected: _selected.contains(option.key),
-            answered: _answered,
-            isCorrect: question.correctAnswers.contains(option.key),
-            onTap: _answered
-                ? null // 判分后禁止再改
-                : () {
-                    setState(() {
-                      if (question.isMultipleChoice) {
-                        // 多选：点一下选中，再点取消
-                        if (!_selected.add(option.key)) {
-                          _selected.remove(option.key);
-                        }
-                      } else {
-                        // 单选与判断：清空后只保留当前项
-                        _selected
-                          ..clear()
-                          ..add(option.key);
-                      }
-                    });
-                  },
-          ),
-        ),
-    ];
-  }
-
-  /// 填空/解释作答区。
-  ///
-  /// 配了 DeepSeek API Key 时用 AI 判分：文字输入 + 可选的拍照/图片作答，
-  /// AI 给 0-10 分，低于 6 分判错；没配 Key 或本题判分失败时退回
-  /// 「展示答案 + 自判」。
-  List<Widget> _buildFillBlank(Question question) {
-    final bool aiEnabled =
-        !_aiFallback && (AppConfig.dsApiKey ?? '').trim().isNotEmpty;
-
-    if (!aiEnabled) {
-      return _buildFillBlankManual(question);
-    }
-
-    // 已判分：输入区收起，对错 / AI 得分 / 参考答案 / 解析由下方结果区展示
-    if (_answered) {
-      return <Widget>[];
-    }
-
-    final bool canSubmit =
-        !_grading &&
-        (_answerController.text.trim().isNotEmpty || _answerImages.isNotEmpty);
-
-    return <Widget>[
-      TextField(
-        controller: _answerController,
-        minLines: 3,
-        maxLines: null, // 随输入内容自动增高
-        enabled: !_grading,
-        onChanged: (_) => setState(() {}), // 让提交按钮的可用状态跟随输入
-        style: const TextStyle(fontSize: 15, height: 1.5),
-        decoration: InputDecoration(
-          hintText: '在这里输入你的答案（也可以只上传图片）',
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-        ),
-      ),
-
-      // 已选图片的缩略图；没有图片时不占空间
-      if (_answerImages.isNotEmpty) ...<Widget>[
-        const SizedBox(height: 12),
-        _buildAnswerImages(),
-      ],
-
-      const SizedBox(height: 10),
-      Align(
-        alignment: Alignment.centerLeft,
-        child: OutlinedButton.icon(
-          onPressed: _grading ? null : _pickAnswerImage,
-          icon: const Icon(Icons.add_a_photo_outlined, size: 18),
-          label: Text(
-            _answerImages.isEmpty
-                ? '拍照 / 上传作答图片'
-                : '继续添加图片（${_answerImages.length}/$_maxAnswerImages）',
-          ),
-        ),
-      ),
-      const SizedBox(height: 2),
-      Text(
-        '拍照上传手写作答，AI 会结合图片内容判分，最多 $_maxAnswerImages 张',
-        style: TextStyle(
-          fontSize: 11,
-          color: Theme.of(context).colorScheme.onSurfaceVariant,
-        ),
-      ),
-      const SizedBox(height: 12),
-
-      // 左边「上一题」，右边「提交」（交给 AI 判分）
-      Row(
-        children: <Widget>[
-          Expanded(
-            child: OutlinedButton(
-              onPressed: _index > 0 ? _previous : null,
-              child: const Text('上一题'),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: FilledButton(
-              onPressed: canSubmit ? () => _submitWithAi(question) : null,
-              child: _grading
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Text('提交'),
-            ),
-          ),
-        ],
-      ),
-    ];
-  }
-
-  /// 没有可用 AI 时的老流程：先展示答案，再由用户自己判断对错。
-  List<Widget> _buildFillBlankManual(Question question) {
-    return <Widget>[
-      if (!_showAnswer)
-        // 左边「上一题」，右边「展示答案」
-        Row(
-          children: <Widget>[
-            Expanded(
-              child: OutlinedButton(
-                onPressed: _index > 0 ? _previous : null,
-                child: const Text('上一题'),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: OutlinedButton(
-                onPressed: _answered
-                    ? null
-                    : () => setState(() => _showAnswer = true),
-                child: const Text('展示答案'),
-              ),
-            ),
-          ],
-        )
-      else ...<Widget>[
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surfaceContainerHigh,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              const Text('参考答案', style: TextStyle(fontSize: 12)),
-              const SizedBox(height: 6),
-              MathText(
-                question.correctAnswers.join('\n'),
-                style: const TextStyle(fontSize: 16, height: 1.5),
-                selectable: true,
-              ),
-            ],
-          ),
-        ),
-        if (!_answered) ...<Widget>[
-          // 用户自己点“答对了 / 答错了”，据此更新统计
-          const SizedBox(height: 16),
-          Row(
-            children: <Widget>[
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: () => _recordAnswer(false),
-                  child: const Text('答错了'),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: FilledButton(
-                  onPressed: () => _recordAnswer(true),
-                  child: const Text('答对了'),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ],
-    ];
-  }
-
-  /// 判分结果条：正确用主色容器，错误用错误色容器。
-  Widget _buildResult(Question question) {
-    final colorScheme = Theme.of(context).colorScheme;
-    final background = _wasCorrect
-        ? colorScheme.primaryContainer
-        : colorScheme.errorContainer;
-    final foreground = _wasCorrect
-        ? colorScheme.onPrimaryContainer
-        : colorScheme.onErrorContainer;
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: background,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Text(
-            _wasCorrect ? '回答正确' : '回答错误',
-            style: TextStyle(fontWeight: FontWeight.w700, color: foreground),
-          ),
-          const SizedBox(height: 6),
-          MathText(
-            '正确答案：${_answerText(question)}',
-            style: TextStyle(color: foreground),
-          ),
-          if (_aiScore != null) ...<Widget>[
-            const SizedBox(height: 4),
-            Text('AI 评分：$_aiScore / 10', style: TextStyle(color: foreground)),
-          ],
-          // 错题本里的题额外显示「还差几次」的进度
-          if (question.isFromMistakeBook) ...<Widget>[
-            const SizedBox(height: 4),
-            Text(
-              question.isMistakeDone
-                  ? '错题本：已完成'
-                  : '错题本：还需答对 ${question.mistakeScore} 次',
-              style: TextStyle(color: foreground),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  /// 题目解析：无论答对答错都展示，用中性配色和判分结果条区分开。
-  ///
-  /// 没有解析（`analysis` 为空）时调用方不会插入这个组件。
-  Widget _buildAnalysis(Question question) {
-    final ColorScheme colorScheme = Theme.of(context).colorScheme;
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: colorScheme.outlineVariant),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Row(
-            children: <Widget>[
-              Icon(
-                Icons.lightbulb_outline,
-                size: 16,
-                color: colorScheme.onSurfaceVariant,
-              ),
-              const SizedBox(width: 6),
-              Text(
-                '解析',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          MathText(
-            question.analysis,
-            style: const TextStyle(fontSize: 14, height: 1.6),
-            selectable: true,
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// 「AI 解析」按钮 + 解析结果框。
-  ///
-  /// 按钮单独抽出来，方便放在判分结果正上方（长解析不会把它顶出屏幕）。
-  List<Widget> _buildAiAnalysisEntry(Question question) {
-    return <Widget>[
-      SizedBox(
-        width: double.infinity,
-        child: OutlinedButton.icon(
-          onPressed: _aiAnalysisLoading
-              ? null
-              : () => _requestAiAnalysis(question),
-          icon: _aiAnalysisLoading
-              ? const SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Icon(Icons.auto_awesome, size: 18),
-          label: Text(_aiAnalysisLoading ? '正在生成解析…' : 'AI 解析'),
-        ),
-      ),
-      ..._buildAiAnalysis(question),
-    ];
-  }
-
-  /// AI 解析区域：只有点过「AI 解析」后才出现，紧跟按钮下方。
-  ///
-  /// 三种状态共用一个外框：加载中、请求失败（可重试）、拿到解析文本。
-  List<Widget> _buildAiAnalysis(Question question) {
-    if (!_aiAnalysisLoading &&
-        _aiAnalysis == null &&
-        _aiAnalysisError == null) {
-      return const <Widget>[];
-    }
-
-    final ColorScheme colorScheme = Theme.of(context).colorScheme;
-
-    return <Widget>[
-      const SizedBox(height: 12),
-      Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: colorScheme.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: colorScheme.outlineVariant),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Row(
-              children: <Widget>[
-                Icon(
-                  Icons.auto_awesome,
-                  size: 16,
-                  color: colorScheme.onSurfaceVariant,
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  'AI 解析',
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            if (_aiAnalysisLoading)
-              Row(
-                children: <Widget>[
-                  const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                  const SizedBox(width: 10),
-                  Text(
-                    '正在生成解析…',
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                ],
-              )
-            else if (_aiAnalysisError != null) ...<Widget>[
-              Text(
-                _aiAnalysisError!,
-                style: TextStyle(fontSize: 13, color: colorScheme.error),
-              ),
-              const SizedBox(height: 8),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: TextButton(
-                  onPressed: () => _requestAiAnalysis(question),
-                  child: const Text('重试'),
-                ),
-              ),
-            ] else
-              MathText(
-                _aiAnalysis!,
-                style: const TextStyle(fontSize: 14, height: 1.6),
-                selectable: true,
-              ),
-          ],
-        ),
-      ),
-    ];
+    setState(() {
+      if (question.isMultipleChoice) {
+        if (!_selected.add(key)) _selected.remove(key);
+      } else {
+        _selected
+          ..clear()
+          ..add(key);
+      }
+    });
   }
 
   /// 把正确答案转成适合展示的文字：选择题带上选项内容。
@@ -1215,8 +712,11 @@ class _PracticePageState extends State<PracticePage>
     }
 
     final texts = question.options
-        .where((option) => question.correctAnswers.contains(option.key))
-        .map((option) => '${option.key}. ${option.text}')
+        .where(
+          (QuestionOption option) =>
+              question.correctAnswers.contains(option.key),
+        )
+        .map((QuestionOption option) => '${option.key}. ${option.text}')
         .toList();
 
     return texts.isEmpty
@@ -1269,141 +769,6 @@ class _PracticePageState extends State<PracticePage>
                 child: const Text('再练一遍'),
               ),
             ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// 题型标签：单选 / 多选 / 判断 / 填空·简答。
-class _TypeBadge extends StatelessWidget {
-  const _TypeBadge({required this.type});
-
-  final QuestionType type;
-
-  String get _label {
-    switch (type) {
-      case QuestionType.singleChoice:
-        return '单选';
-      case QuestionType.multipleChoice:
-        return '多选';
-      case QuestionType.trueFalse:
-        return '判断';
-      case QuestionType.fillBlank:
-        return '填空/简答';
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-      decoration: BoxDecoration(
-        color: colorScheme.secondaryContainer,
-        borderRadius: BorderRadius.circular(99),
-      ),
-      child: Text(
-        _label,
-        style: TextStyle(
-          fontSize: 11,
-          fontWeight: FontWeight.w600,
-          color: colorScheme.onSecondaryContainer,
-        ),
-      ),
-    );
-  }
-}
-
-/// 选项按钮：未作答、已选中、答对、答错分别用不同颜色表示。
-class _OptionButton extends StatelessWidget {
-  const _OptionButton({
-    required this.option,
-    required this.selected,
-    required this.answered,
-    required this.isCorrect,
-    required this.onTap,
-  });
-
-  final QuestionOption option;
-  final bool selected; // 用户是否选中了这一项
-  final bool answered; // 本题是否已判分
-  final bool isCorrect; // 这一项是否是正确答案
-  final VoidCallback? onTap; // 判分后传 null，禁止再点
-
-  @override
-  Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-
-    // 默认样式
-    Color border = colorScheme.outlineVariant;
-    Color background = colorScheme.surface;
-    Color foreground = colorScheme.onSurface;
-
-    if (answered) {
-      // 判分后：正确项高亮主色，选错的项高亮错误色
-      if (isCorrect) {
-        border = colorScheme.primary;
-        background = colorScheme.primaryContainer;
-        foreground = colorScheme.onPrimaryContainer;
-      } else if (selected) {
-        border = colorScheme.error;
-        background = colorScheme.errorContainer;
-        foreground = colorScheme.onErrorContainer;
-      }
-    } else if (selected) {
-      // 作答前：选中的项用主色边框和浅色底
-      border = colorScheme.primary;
-      background = colorScheme.primary.withValues(alpha: 0.08);
-      foreground = colorScheme.primary;
-    }
-
-    return InkWell(
-      borderRadius: BorderRadius.circular(14),
-      onTap: onTap,
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        decoration: BoxDecoration(
-          color: background,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: border),
-        ),
-        child: Row(
-          children: <Widget>[
-            // 左侧字母圆标：A/B/C/D
-            Container(
-              width: 28,
-              height: 28,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: selected || (answered && isCorrect)
-                    ? border
-                    : colorScheme.surfaceContainerHighest,
-              ),
-              child: Text(
-                option.key,
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: selected || (answered && isCorrect)
-                      ? colorScheme.surface
-                      : colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: MathText(option.text, style: TextStyle(color: foreground)),
-            ),
-            // 判分后右侧显示勾或叉
-            if (answered && isCorrect)
-              Icon(Icons.check, size: 20, color: colorScheme.primary)
-            else if (answered && selected && !isCorrect)
-              Icon(Icons.close, size: 20, color: colorScheme.error),
           ],
         ),
       ),

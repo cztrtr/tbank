@@ -1,5 +1,6 @@
 import 'dart:io';
-import 'dart:typed_data';
+
+import 'package:flutter/foundation.dart';
 
 import '../models/question_bank_file.dart';
 import 'saf.dart';
@@ -18,17 +19,21 @@ class BankIo {
   /// 这个引用是不是 SAF 的 content URI。
   static bool _isSafRef(String ref) => ref.startsWith('content://');
 
-  /// 列出目录下所有 `.json`，按文件名升序。
+  /// 列出目录下的 `.json`，按「子目录 + 文件名」排序。
   ///
-  /// SAF 和桌面路径都会走这里；目录不可用时抛出异常，由调用方转成界面提示。
+  /// [recursive] 为 true 时额外向下扫一层子目录（跳过 `.` 开头的隐藏目录），
+  /// 子目录文件带 `sourceDirectoryRef` / `subDirectory`，配图和回拷仍指向
+  /// 文件实际所在的子目录。目录不可用时抛出异常，由调用方转成界面提示。
   static Future<List<QuestionBankFile>> listJsonFiles(
     String directoryRef, {
     String? directoryName,
+    bool recursive = false,
   }) async {
     if (_isSafRef(directoryRef)) {
       final List<SafEntry> entries = await Saf.listChildren(
         directoryRef,
         extension: '.json',
+        recursive: recursive,
       );
 
       final List<QuestionBankFile> files = entries
@@ -36,16 +41,18 @@ class BankIo {
             (SafEntry entry) => QuestionBankFile(
               name: entry.name,
               uri: entry.uri,
-              directoryRef: directoryRef,
-              directoryName: directoryName,
+              directoryRef: entry.parentUri ?? directoryRef,
+              sourceDirectoryRef: directoryRef,
+              subDirectory: entry.subDirectory,
+              directoryName: _combinedDirectoryName(
+                directoryName,
+                entry.subDirectory,
+              ),
             ),
           )
           .toList();
 
-      files.sort(
-        (QuestionBankFile a, QuestionBankFile b) =>
-            a.name.toLowerCase().compareTo(b.name.toLowerCase()),
-      );
+      files.sort(_compareFiles);
       return files;
     }
 
@@ -55,28 +62,73 @@ class BankIo {
       throw FileSystemException('目录不存在', directoryRef);
     }
 
+    final List<File> rootFiles = <File>[];
+    final List<Directory> subDirs = <Directory>[];
+    await for (final FileSystemEntity entity
+        in dir.list(followLinks: false)) {
+      if (entity is File) {
+        rootFiles.add(entity);
+      } else if (entity is Directory && recursive) {
+        final String name = _lastPathSegment(entity.path);
+        if (!name.startsWith('.')) subDirs.add(entity);
+      }
+    }
+
     final List<QuestionBankFile> files = <QuestionBankFile>[];
-    await for (final FileSystemEntity entity in dir.list(followLinks: false)) {
-      if (entity is! File) continue;
 
-      final String name = entity.path.split(Platform.pathSeparator).last;
-      if (!name.toLowerCase().endsWith('.json')) continue;
-
+    void addFile(File file, String fileDirectory, String subDirectory) {
+      if (!file.path.toLowerCase().endsWith('.json')) return;
       files.add(
         QuestionBankFile(
-          name: name,
-          uri: entity.path,
-          directoryRef: directoryRef,
-          directoryName: directoryName,
+          name: _lastPathSegment(file.path),
+          uri: file.path,
+          directoryRef: fileDirectory,
+          sourceDirectoryRef: directoryRef,
+          subDirectory: subDirectory,
+          directoryName: _combinedDirectoryName(
+            directoryName,
+            subDirectory,
+          ),
         ),
       );
     }
 
-    files.sort(
-      (QuestionBankFile a, QuestionBankFile b) =>
-          a.name.toLowerCase().compareTo(b.name.toLowerCase()),
-    );
+    for (final File file in rootFiles) {
+      addFile(file, directoryRef, '');
+    }
+
+    for (final Directory subDir in subDirs) {
+      final String subDirectory = _lastPathSegment(subDir.path);
+      try {
+        await for (final FileSystemEntity entity
+            in subDir.list(followLinks: false)) {
+          if (entity is File) {
+            addFile(entity, subDir.path, subDirectory);
+          }
+        }
+      } catch (error) {
+        // 单个子目录读不了不影响根目录和其它子目录
+        debugPrint('扫描子目录失败：${subDir.path} $error');
+      }
+    }
+
+    files.sort(_compareFiles);
     return files;
+  }
+
+  /// 根目录名 + 子目录名；递归文件在统计/错题本里按子目录分组。
+  static String? _combinedDirectoryName(String? rootName, String sub) {
+    if (rootName == null) return null;
+    return sub.isEmpty ? rootName : '$rootName/$sub';
+  }
+
+  /// 按根文件的名字、子目录文件的「子目录/名字」排序，根文件顺序和以前一致。
+  static int _compareFiles(QuestionBankFile a, QuestionBankFile b) {
+    final String left =
+        a.subDirectory.isEmpty ? a.name : '${a.subDirectory}/${a.name}';
+    final String right =
+        b.subDirectory.isEmpty ? b.name : '${b.subDirectory}/${b.name}';
+    return left.toLowerCase().compareTo(right.toLowerCase());
   }
 
   /// 读取题库 JSON 文本。
@@ -227,6 +279,17 @@ class BankIo {
         .where((String s) => s.isNotEmpty)
         .toList();
     return parts.isEmpty ? path : parts.last;
+  }
+
+  /// 取文件引用所在的目录（纯字符串处理，不做 IO）。
+  ///
+  /// 页面构造 `QuestionBankFile` 时用它拿 `directoryRef`，不要直接
+  /// `File(path).parent`，这样页面不需要碰 `dart:io`。
+  static String directoryOfFile(String fileRef) {
+    final int index = fileRef.replaceAll('\\', '/').lastIndexOf('/');
+    if (index <= 0) return fileRef;
+    // 替换分隔符不改变字符串长度，可以直接用原串截取，保留原来的 \ 或 /
+    return fileRef.substring(0, index);
   }
 
   /// 去掉 UTF-8 BOM；带 BOM 的文本会让 jsonDecode 直接失败。

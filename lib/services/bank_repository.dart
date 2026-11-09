@@ -98,6 +98,7 @@ class BankRepository {
           final List<QuestionBankFile> found = await BankIo.listJsonFiles(
             dirRef,
             directoryName: BankIo.displayNameOf(dirRef),
+            recursive: true,
           );
           return (files: found, error: null as String?);
         } catch (error) {

@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -95,13 +94,7 @@ class QuestionBankStorage {
   }
 
   /// 解析题库 JSON；根节点不是对象时抛出 [FormatException]。
-  QuestionBank _decode(String raw) {
-    final dynamic decoded = jsonDecode(raw);
-    if (decoded is! Map<String, dynamic>) {
-      throw const FormatException('题库文件根节点必须是 JSON 对象');
-    }
-    return QuestionBank.fromJson(decoded);
-  }
+  QuestionBank _decode(String raw) => QuestionCodec.decode(raw);
 
   /// 把工作副本写回来源，成功返回 true。
   ///
@@ -125,8 +118,7 @@ class QuestionBankStorage {
       if (working == null) return;
 
       // 题目量小，直接整份覆盖写
-      final String content =
-          const JsonEncoder.withIndent('  ').convert(bank.toJson());
+      final String content = QuestionCodec.encode(bank);
       await working.writeAsString(content, flush: true);
       await _markDirty();
     });

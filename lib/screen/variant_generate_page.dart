@@ -7,15 +7,10 @@ import 'package:flutter/material.dart';
 
 import '../models/question_bank.dart';
 import '../models/question_bank_file.dart';
-import '../services/ai_question_generator.dart';
 import '../services/variant_question_generator.dart';
 import '../services/ds_api_service.dart';
-
-/// 可选题型：与 AI 出题页共用完整标签列表。
-///
-/// 单选 / 多选 / 判断有独立数据层类型；填空、名词解释、解答、证明
-/// 在数据层统一存为 `fill_blank`。
-const List<String> _typeOrder = AiQuestionGenerator.allTypeLabels;
+import '../services/plugin_manager.dart';
+import 'plugin_type_selector.dart';
 
 /// 题量下拉的固定档位；原题库题数不在档位里时会额外补一项。
 const List<int> _countPresets = <int>[5, 10, 15, 20, 25, 30, 40, 50, 75, 100];
@@ -36,6 +31,9 @@ class _VariantGeneratePageState extends State<VariantGeneratePage> {
 
   /// 已解析的原题库；加载失败时为 null。
   QuestionBank? _bank;
+
+  /// 处理原题库的插件；生成时沿用它的题型说明和 type 标识。
+  PluginManifest? _plugin;
 
   /// 本次将要写入的目标文件名（按希腊字母自动取下一个）。
   String? _targetFileName;
@@ -62,15 +60,31 @@ class _VariantGeneratePageState extends State<VariantGeneratePage> {
       final QuestionBank bank = await VariantQuestionGenerator.loadBank(
         widget.source,
       );
+      final PluginManifest? plugin = await PluginManager.find(
+        bank.effectivePlugin,
+      );
+      if (plugin == null) {
+        throw DsApiException('题库需要插件「${bank.effectivePlugin}」，请先到插件管理安装');
+      }
       final String targetFileName = await VariantQuestionGenerator.nextFileName(
         widget.source,
       );
       if (!mounted) return;
 
+      final Set<String> sourceTypes = bank.questions
+          .map((Question question) => question.typeId)
+          .toSet();
+      final List<String> supported = plugin.types;
+      final Set<String> selected = supported
+          .where(sourceTypes.contains)
+          .toSet();
       setState(() {
         _bank = bank;
+        _plugin = plugin;
         _targetFileName = targetFileName;
-        _selectedTypes.addAll(VariantQuestionGenerator.typesOf(bank));
+        _selectedTypes
+          ..clear()
+          ..addAll(selected.isEmpty ? supported : selected);
         _count = bank.questions.length
             .clamp(5, VariantQuestionGenerator.maxCount)
             .toInt();
@@ -105,7 +119,8 @@ class _VariantGeneratePageState extends State<VariantGeneratePage> {
 
   Future<void> _generate() async {
     final QuestionBank? bank = _bank;
-    if (bank == null) return;
+    final PluginManifest? plugin = _plugin;
+    if (bank == null || plugin == null) return;
 
     if (_selectedTypes.isEmpty) {
       _toast('至少选择一种题型');
@@ -123,8 +138,9 @@ class _VariantGeneratePageState extends State<VariantGeneratePage> {
       final VariantResult result = await VariantQuestionGenerator.generate(
         source: widget.source,
         sourceBank: bank,
+        plugin: plugin,
         count: _count,
-        types: _typeOrder.where(_selectedTypes.contains).toList(),
+        types: _selectedTypes.toList(),
         onProgress: (VariantProgress progress) {
           if (!mounted) return;
           setState(() => _progress = progress);
@@ -228,7 +244,7 @@ class _VariantGeneratePageState extends State<VariantGeneratePage> {
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      widget.source.displayName,
+                      widget.source.displayPath,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: textTheme.titleMedium?.copyWith(
@@ -241,7 +257,7 @@ class _VariantGeneratePageState extends State<VariantGeneratePage> {
               const SizedBox(height: 8),
               Text(
                 '共 ${bank.questions.length} 题 · 题型：'
-                '${VariantQuestionGenerator.typesOf(bank).join(' / ')}',
+                '${bank.questions.map((Question q) => q.typeId).toSet().join(' / ')}',
                 style: TextStyle(
                   fontSize: 13,
                   color: colorScheme.onSurfaceVariant,
@@ -301,31 +317,18 @@ class _VariantGeneratePageState extends State<VariantGeneratePage> {
         ),
         const SizedBox(height: 14),
 
-        // ---- 题型 ----
-        Text(
-          '题型',
-          style: textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
-        ),
-        const SizedBox(height: 6),
-        Wrap(
-          spacing: 8,
-          children: <Widget>[
-            for (final String label in _typeOrder)
-              FilterChip(
-                label: Text(label),
-                selected: _selectedTypes.contains(label),
-                onSelected: _generating
-                    ? null
-                    : (bool selected) => setState(() {
-                        if (selected) {
-                          _selectedTypes.add(label);
-                        } else {
-                          _selectedTypes.remove(label);
-                        }
-                      }),
-              ),
-          ],
-        ),
+        // ---- 插件题型 ----
+        if (_plugin != null)
+          PluginTypeSelector(
+            plugins: <PluginManifest>[_plugin!],
+            selectedPlugin: _plugin,
+            selectedTypes: _selectedTypes,
+            enabled: !_generating,
+            onPluginChanged: (_) {},
+            onTypeToggled: (String type) => setState(() {
+              if (!_selectedTypes.add(type)) _selectedTypes.remove(type);
+            }),
+          ),
         const SizedBox(height: 16),
 
         // ---- 生成按钮 ----

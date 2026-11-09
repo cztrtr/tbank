@@ -21,6 +21,8 @@ import 'package:path_provider/path_provider.dart';
 
 import '../models/question_bank_file.dart';
 import 'ds_api_service.dart';
+import 'plugin_manager.dart';
+import 'plugin_schema.dart';
 
 /// 一份已生成的 AI 题库文件。
 class AiBankInfo {
@@ -250,25 +252,51 @@ class AiQuestionGenerator {
     '证明',
   ];
 
+  /// 把插件题型拼成给 AI 的说明文本。
+  static String buildTypeSpec(Iterable<PluginTypeInfo> types) {
+    final StringBuffer buffer = StringBuffer();
+    for (final PluginTypeInfo type in types) {
+      buffer.writeln(
+        '- ${type.id}（${type.name}）：'
+        '${type.description.isEmpty ? '按该题型标识生成' : type.description}',
+      );
+      if (type.example != null) {
+        buffer.writeln('  pluginData 示例：${jsonEncode(type.example)}');
+      }
+      if (type.schema != null) {
+        buffer.writeln('  pluginData JSON Schema：${jsonEncode(type.schema)}');
+      }
+    }
+    return buffer.toString().trimRight();
+  }
+
   /// 调 AI 生成 [count] 道题，校验后按「每本最多 [perBook] 题」切分保存。
   ///
-  /// [types] 是中文题型标签（见 [allTypeLabels]）；填空、名词解释、
-  /// 解答、证明在数据层统一存为 `fill_blank`。
-  /// 生成按批次进行：每批最多 [perBook] 道，避免单次输出过长被截断。
-  /// 题目 id 全局连续重编为 `Q001`…；`stats` 归零；`image` 置空。
-  /// [onProgress] 在每批完成后回调（已完成题数, 目标题数）。
-  ///
-  /// 失败（网络、Key、AI 返回不是合法 JSON 等）时抛 [DsApiException]；
-  /// 若已有部分批次成功，则保留已生成的文件并返回。
+  /// [plugin] 不为空时，题型说明和 type 标识都来自插件 manifest，生成文件
+  /// 根节点写入 `plugin` / `pluginVersion`；为空时保留旧的 standard 行为。
   static Future<List<AiBankInfo>> generateAndSave({
     required String topic,
     required String requirements,
     required List<String> types,
     required int count,
+    PluginManifest? plugin,
+    List<PluginTypeInfo>? pluginTypes,
     void Function(int finished, int total)? onProgress,
   }) async {
     final int target = count < 1 ? 1 : count;
     final List<AiBankInfo> saved = <AiBankInfo>[];
+    if (plugin != null) {
+      return _generateAndSaveForPlugin(
+        topic: topic,
+        requirements: requirements,
+        target: target,
+        plugin: plugin,
+        pluginTypes: pluginTypes ?? plugin.typeInfos,
+        onProgress: onProgress,
+      );
+    }
+
+    final String? typeSpec = null;
     int finished = 0;
     int batchIndex = 0;
 
@@ -282,9 +310,14 @@ class AiQuestionGenerator {
         requirements: requirements,
         types: types,
         count: batchCount,
+        typeSpec: typeSpec,
       );
 
-      final List<Map<String, dynamic>> questions = parseQuestions(raw);
+      final List<Map<String, dynamic>> questions = parseQuestions(
+        raw,
+        allowedTypes: plugin?.types.toSet(),
+        plugin: plugin,
+      );
       if (questions.isEmpty) {
         if (saved.isEmpty) {
           throw DsApiException('AI 返回的题目格式不正确，请重试');
@@ -309,6 +342,8 @@ class AiQuestionGenerator {
           topic: topic,
           questions: batchQuestions,
           index: batchIndex,
+          plugin: plugin?.id,
+          pluginVersion: plugin?.apiVersion,
         ),
       );
       finished += batchQuestions.length;
@@ -317,11 +352,123 @@ class AiQuestionGenerator {
     return saved;
   }
 
+  /// 插件模式：按题型分配配额，逐类型生成；不足时立即重试，确保覆盖。
+  static Future<List<AiBankInfo>> _generateAndSaveForPlugin({
+    required String topic,
+    required String requirements,
+    required int target,
+    required PluginManifest plugin,
+    required List<PluginTypeInfo> pluginTypes,
+    void Function(int finished, int total)? onProgress,
+  }) async {
+    final List<Map<String, dynamic>> questions = await generateWithCoverage(
+      plugin: plugin,
+      types: pluginTypes,
+      target: target,
+      request: (PluginTypeInfo type, int count) {
+        return DsApiService.generateQuestions(
+          topic: topic,
+          requirements: requirements,
+          types: <String>[type.id],
+          count: count,
+          typeSpec: buildTypeSpec(<PluginTypeInfo>[type]),
+        );
+      },
+      onProgress: onProgress,
+    );
+
+    for (int i = 0; i < questions.length; i++) {
+      questions[i]['id'] = 'Q${(i + 1).toString().padLeft(3, '0')}';
+    }
+
+    final List<AiBankInfo> saved = <AiBankInfo>[];
+    for (int start = 0; start < questions.length; start += perBook) {
+      final int end = (start + perBook).clamp(0, questions.length);
+      final int index = saved.length + 1;
+      saved.add(
+        await _saveBook(
+          topic: topic,
+          questions: questions.sublist(start, end),
+          index: index,
+          plugin: plugin.id,
+          pluginVersion: plugin.apiVersion,
+        ),
+      );
+    }
+    return saved;
+  }
+
+  /// 按题型配额生成，失败题目立即重试；每个已选题型至少产出 1 道。
+  ///
+  /// [request] 只负责请求某一题型；解析、schema 校验和重试都在这里做。
+  static Future<List<Map<String, dynamic>>> generateWithCoverage({
+    required PluginManifest plugin,
+    required List<PluginTypeInfo> types,
+    required int target,
+    required Future<String> Function(PluginTypeInfo type, int count) request,
+    void Function(int finished, int total)? onProgress,
+    int maxCallsPerType = 4,
+  }) async {
+    final List<PluginTypeInfo> selected = types
+        .where((PluginTypeInfo type) => type.id.trim().isNotEmpty)
+        .toList();
+    if (selected.isEmpty) {
+      throw DsApiException('请至少选择一种题型');
+    }
+    if (target < selected.length) {
+      throw DsApiException('题量至少为题型数量 ${selected.length}，才能覆盖每个题型');
+    }
+
+    final int base = target ~/ selected.length;
+    final int remainder = target % selected.length;
+    final List<Map<String, dynamic>> questions = <Map<String, dynamic>>[];
+    int finished = 0;
+
+    for (int typeIndex = 0; typeIndex < selected.length; typeIndex++) {
+      final PluginTypeInfo type = selected[typeIndex];
+      final int quota = base + (typeIndex < remainder ? 1 : 0);
+      int produced = 0;
+      int calls = 0;
+
+      while (produced < quota) {
+        if (calls >= maxCallsPerType) {
+          throw DsApiException(
+            '题型「${type.name}」生成失败：重试 $maxCallsPerType 次后仍只有 '
+            '$produced/$quota 道有效题',
+          );
+        }
+        calls++;
+
+        final int need = quota - produced;
+        final String raw = await request(type, need > perBook ? perBook : need);
+        final List<Map<String, dynamic>> parsed = parseQuestions(
+          raw,
+          allowedTypes: plugin.types.toSet(),
+          plugin: plugin,
+        );
+        final List<Map<String, dynamic>> matched = parsed
+            .where((Map<String, dynamic> q) => q['type'] == type.id)
+            .toList();
+        final int take = matched.length > need ? need : matched.length;
+        for (int i = 0; i < take; i++) {
+          questions.add(matched[i]);
+          produced++;
+          finished++;
+          onProgress?.call(finished, target);
+        }
+      }
+    }
+
+    return questions;
+  }
+
   /// 把一批题目写成一个题库文件：`<主题>-<时间戳>-<批次>.json`。
   static Future<AiBankInfo> _saveBook({
     required String topic,
     required List<Map<String, dynamic>> questions,
     required int index,
+    String? plugin,
+    int? pluginVersion,
   }) async {
     final Directory topicDir = await ensureTopicDir(topic);
     final String safeTopic = sanitizeTopic(topic);
@@ -330,8 +477,13 @@ class AiQuestionGenerator {
       '${topicDir.path}${Platform.pathSeparator}$fileName',
     );
 
-    final String content = const JsonEncoder.withIndent('  ')
-        .convert(<String, dynamic>{'questions': questions});
+    final Map<String, dynamic> json = <String, dynamic>{};
+    if (plugin != null && plugin.isNotEmpty) {
+      json['plugin'] = plugin;
+      json['pluginVersion'] = pluginVersion ?? 1;
+    }
+    json['questions'] = questions;
+    final String content = const JsonEncoder.withIndent('  ').convert(json);
     await file.writeAsString(content, flush: true);
 
     // 如果主题目录名与用户输入的原始主题不同，以实际目录名为准
@@ -361,6 +513,8 @@ class AiQuestionGenerator {
     String? baseName,
     required List<Map<String, dynamic>> questions,
     required int batchIndex,
+    String? plugin,
+    int? pluginVersion,
   }) async {
     final Directory dir = await ensureBankDir(topic, rawSubTopic: subTopic);
     final String requested = sanitizeTopic(
@@ -373,8 +527,13 @@ class AiQuestionGenerator {
     final String base = _uniqueBaseName(dir, stem);
     final File file = File('${dir.path}${Platform.pathSeparator}$base.json');
 
-    final String content = const JsonEncoder.withIndent('  ')
-        .convert(<String, dynamic>{'questions': questions});
+    final Map<String, dynamic> json = <String, dynamic>{};
+    if (plugin != null && plugin.isNotEmpty) {
+      json['plugin'] = plugin;
+      json['pluginVersion'] = pluginVersion ?? 1;
+    }
+    json['questions'] = questions;
+    final String content = const JsonEncoder.withIndent('  ').convert(json);
     await file.writeAsString(content, flush: true);
 
     // 与 listBanks 保持一致：子目录文件的分组名是「主题/子主题」
@@ -469,7 +628,11 @@ class AiQuestionGenerator {
   /// - 去掉 ```json 代码围栏；
   /// - 只截取第一个 `{` 到最后一个 `}`；
   /// - 单题字段不全时跳过该题，不因一道题坏掉整批。
-  static List<Map<String, dynamic>> parseQuestions(String raw) {
+  static List<Map<String, dynamic>> parseQuestions(
+    String raw, {
+    Set<String>? allowedTypes,
+    PluginManifest? plugin,
+  }) {
     String text = raw.trim();
     final RegExpMatch? fenced = RegExp(r'```(?:json)?\s*([\s\S]*?)```')
         .firstMatch(text);
@@ -499,7 +662,11 @@ class AiQuestionGenerator {
     final List<Map<String, dynamic>> questions = <Map<String, dynamic>>[];
     for (final dynamic item in rawQuestions) {
       if (item is! Map) continue;
-      final Map<String, dynamic>? normalized = _normalizeQuestion(item);
+      final Map<String, dynamic>? normalized = _normalizeQuestion(
+        item,
+        allowedTypes: allowedTypes,
+        plugin: plugin,
+      );
       if (normalized != null) questions.add(normalized);
     }
     return questions;
@@ -507,28 +674,34 @@ class AiQuestionGenerator {
 
   /// 校验并规范化一道题；字段不合法时返回 null。
   ///
-  /// 支持四种数据层题型：single_choice / multiple_choice / true_false /
-  /// fill_blank（填空、解答、证明统一用 fill_blank，没有选项）。
+  /// [allowedTypes] 不为空时只接受插件声明的 type；标准四种题型继续做
+  /// 选项/答案校验，自定义题型只做通用字段校验，具体结构由插件负责。
   static Map<String, dynamic>? _normalizeQuestion(
-    Map<dynamic, dynamic> item,
-  ) {
-    final String type = item['type']?.toString() ?? '';
-    final bool isFillBlank = type == 'fill_blank';
-    if (!isFillBlank &&
-        type != 'single_choice' &&
-        type != 'multiple_choice' &&
-        type != 'true_false') {
+    Map<dynamic, dynamic> item, {
+    Set<String>? allowedTypes,
+    PluginManifest? plugin,
+  }) {
+    final String type = item['type']?.toString().trim() ?? '';
+    const Set<String> standardTypes = <String>{
+      'single_choice',
+      'multiple_choice',
+      'true_false',
+      'fill_blank',
+    };
+    final bool isStandard = standardTypes.contains(type);
+    if (allowedTypes != null) {
+      if (!allowedTypes.contains(type)) return null;
+    } else if (!isStandard) {
       return null;
     }
 
     final String question = item['question']?.toString().trim() ?? '';
     if (question.isEmpty) return null;
 
-    // 选项：填空/解答/证明没有选项；其余题型至少 2 个选项
+    final bool isFillBlank = type == 'fill_blank';
     final List<Map<String, dynamic>> options = <Map<String, dynamic>>[];
-    if (!isFillBlank) {
-      final dynamic rawOptions = item['options'];
-      if (rawOptions is! List) return null;
+    final dynamic rawOptions = item['options'];
+    if (rawOptions is List) {
       for (final dynamic option in rawOptions) {
         if (option is! Map) continue;
         final String key = option['key']?.toString().trim() ?? '';
@@ -536,10 +709,11 @@ class AiQuestionGenerator {
         if (key.isEmpty || text.isEmpty) continue;
         options.add(<String, dynamic>{'key': key, 'text': text});
       }
-      if (options.length < 2) return null;
     }
 
-    // 答案：选择题是选项 key；主观题是答案文本（模型偶尔直接给字符串，也接受）
+    if (isStandard && !isFillBlank && options.length < 2) return null;
+
+    // 答案：选择题是选项 key；主观题/自定义题型是答案文本
     final dynamic rawAnswer = item['correctAnswer'];
     final List<String> answers = rawAnswer is List
         ? rawAnswer.whereType<String>().map((String s) => s.trim()).toList()
@@ -548,12 +722,26 @@ class AiQuestionGenerator {
               : <String>[]);
     if (answers.isEmpty) return null;
 
-    if (!isFillBlank) {
+    if (isStandard && !isFillBlank) {
       final Set<String> keys = options
           .map((Map<String, dynamic> o) => o['key'] as String)
           .toSet();
       for (final String answer in answers) {
         if (!keys.contains(answer)) return null; // 答案不在选项里：这题作废
+      }
+    }
+
+    // 插件私有字段：有 schema 就必须是对象并通过校验，没 schema 时保留原样。
+    Map<String, dynamic>? pluginData;
+    final dynamic rawPluginData = item['pluginData'];
+    if (rawPluginData is Map) {
+      pluginData = Map<String, dynamic>.from(rawPluginData);
+    }
+    final Map<String, dynamic>? schema = plugin?.schemaForType(type);
+    if (schema != null) {
+      if (pluginData == null) return null;
+      if (PluginSchemaValidator.validate(schema, pluginData) != null) {
+        return null;
       }
     }
 
@@ -566,6 +754,7 @@ class AiQuestionGenerator {
       'correctAnswer': answers,
       'analysis': item['analysis']?.toString().trim() ?? '',
       'stats': <String, dynamic>{'attemptCount': 0, 'wrongCount': 0},
+      'pluginData': ?pluginData,
     };
   }
 

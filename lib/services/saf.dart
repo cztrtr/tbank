@@ -16,12 +16,25 @@ class SafDirectory {
 
 /// 目录里的一个文件。
 class SafEntry {
-  const SafEntry({required this.name, required this.uri});
+  const SafEntry({
+    required this.name,
+    required this.uri,
+    this.parentUri,
+    this.subDirectory = '',
+  });
 
   final String name;
 
   /// 文件的 document URI，可直接用于读写。
   final String uri;
+
+  /// 文件所在目录的 document URI；递归扫描子目录时用它读配图、回拷。
+  ///
+  /// 根目录下的文件为 null（调用方退回授权根目录）。
+  final String? parentUri;
+
+  /// 相对授权根目录的子目录名；根目录下的文件为空字符串。
+  final String subDirectory;
 }
 
 /// Android Storage Access Framework 的 Dart 封装。
@@ -50,14 +63,22 @@ class Saf {
     return SafDirectory(uri: uri, name: (result['name'] as String?) ?? uri);
   }
 
-  /// 列出目录下的一级文件；`extension` 形如 `.json`，为 null 时不过滤。
+  /// 列出目录下的文件；`extension` 形如 `.json`，为 null 时不过滤。
+  ///
+  /// [recursive] 为 true 时额外向下扫一层子目录，返回的子目录文件带
+  /// [SafEntry.parentUri] 和 [SafEntry.subDirectory]；跳过 `.` 开头的隐藏目录。
   static Future<List<SafEntry>> listChildren(
     String directoryUri, {
     String? extension,
+    bool recursive = false,
   }) async {
     final List<dynamic>? rows = await _channel.invokeListMethod<dynamic>(
       'listChildren',
-      <String, dynamic>{'uri': directoryUri, 'ext': extension},
+      <String, dynamic>{
+        'uri': directoryUri,
+        'ext': extension,
+        'recursive': recursive,
+      },
     );
     if (rows == null) return <SafEntry>[];
 
@@ -67,7 +88,14 @@ class Saf {
       final String? name = row['name'] as String?;
       final String? uri = row['uri'] as String?;
       if (name == null || uri == null) continue;
-      entries.add(SafEntry(name: name, uri: uri));
+      entries.add(
+        SafEntry(
+          name: name,
+          uri: uri,
+          parentUri: row['parentUri'] as String?,
+          subDirectory: (row['subDirectory'] as String?) ?? '',
+        ),
+      );
     }
     return entries;
   }

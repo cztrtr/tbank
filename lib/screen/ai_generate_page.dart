@@ -1,10 +1,11 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 
 import '../models/question_bank_file.dart';
 import '../services/ai_question_generator.dart';
+import '../services/bank_io.dart';
 import '../services/ds_api_service.dart';
+import '../services/plugin_manager.dart';
+import 'plugin_type_selector.dart';
 import 'practice_page.dart';
 
 /// AI 出题页。
@@ -24,13 +25,12 @@ class _AiGeneratePageState extends State<AiGeneratePage> {
   final TextEditingController _topicController = TextEditingController();
   final TextEditingController _requirementsController = TextEditingController();
 
-  /// 已选题型（中文标签），默认全选。
-  ///
-  /// 填空、名词解释、解答、证明在数据层统一存为 `fill_blank`，由 AI 判分；
-  /// 完整标签列表见 [AiQuestionGenerator.allTypeLabels]。
-  final Set<String> _selectedTypes = <String>{
-    ...AiQuestionGenerator.allTypeLabels,
-  };
+  bool _loadingPlugins = true;
+  List<PluginManifest> _plugins = <PluginManifest>[];
+  PluginManifest? _plugin;
+
+  /// 当前插件声明的题型 id；由 manifest 提供，不再硬编码中文标签。
+  final Set<String> _selectedTypes = <String>{};
 
   bool _generating = false;
   String? _error;
@@ -47,6 +47,7 @@ class _AiGeneratePageState extends State<AiGeneratePage> {
   @override
   void initState() {
     super.initState();
+    _loadPlugins();
     _loadBanks();
   }
 
@@ -55,6 +56,46 @@ class _AiGeneratePageState extends State<AiGeneratePage> {
     _topicController.dispose();
     _requirementsController.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadPlugins() async {
+    try {
+      final List<PluginManifest> plugins = await PluginManager.list();
+      if (!mounted) return;
+      final PluginManifest? initial =
+          plugins.where((PluginManifest item) => item.builtin).firstOrNull ??
+          plugins.firstOrNull;
+      setState(() {
+        _plugins = plugins;
+        _plugin = initial;
+        _selectedTypes
+          ..clear()
+          ..addAll(initial?.types ?? const <String>[]);
+        _loadingPlugins = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loadingPlugins = false;
+        _error = '读取插件失败：$error';
+      });
+    }
+  }
+
+  void _choosePlugin(PluginManifest? plugin) {
+    if (plugin == null) return;
+    setState(() {
+      _plugin = plugin;
+      _selectedTypes
+        ..clear()
+        ..addAll(plugin.types);
+    });
+  }
+
+  void _toggleType(String type) {
+    setState(() {
+      if (!_selectedTypes.add(type)) _selectedTypes.remove(type);
+    });
   }
 
   Future<void> _loadBanks() async {
@@ -74,7 +115,12 @@ class _AiGeneratePageState extends State<AiGeneratePage> {
   Future<void> _generate() async {
     final String topic = _topicController.text.trim();
     final String requirements = _requirementsController.text.trim();
+    final PluginManifest? plugin = _plugin;
 
+    if (plugin == null) {
+      _toast('请先选择出题插件');
+      return;
+    }
     if (topic.isEmpty) {
       _toast('请先输入主题（会作为题库文件夹名）');
       return;
@@ -95,11 +141,16 @@ class _AiGeneratePageState extends State<AiGeneratePage> {
     });
 
     try {
+      final List<PluginTypeInfo> selectedTypes = plugin.typeInfos
+          .where((PluginTypeInfo type) => _selectedTypes.contains(type.id))
+          .toList();
       final List<AiBankInfo> banks = await AiQuestionGenerator.generateAndSave(
         topic: topic,
         requirements: requirements,
         types: _selectedTypes.toList(),
         count: _count,
+        plugin: plugin,
+        pluginTypes: selectedTypes,
         onProgress: (int finished, int total) {
           if (!mounted) return;
           setState(() => _progress = (finished: finished, total: total));
@@ -137,7 +188,7 @@ class _AiGeneratePageState extends State<AiGeneratePage> {
               bank: QuestionBankFile(
                 name: bank.fileName,
                 uri: bank.path,
-                directoryRef: File(bank.path).parent.path,
+                directoryRef: BankIo.directoryOfFile(bank.path),
                 directoryName: bank.topic,
               ),
             ),
@@ -196,30 +247,15 @@ class _AiGeneratePageState extends State<AiGeneratePage> {
           ),
           const SizedBox(height: 14),
 
-          // ---- 题型 ----
-          Text(
-            '题型',
-            style: textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
-          ),
-          const SizedBox(height: 6),
-          Wrap(
-            spacing: 8,
-            children: <Widget>[
-              for (final String label in AiQuestionGenerator.allTypeLabels)
-                FilterChip(
-                  label: Text(label),
-                  selected: _selectedTypes.contains(label),
-                  onSelected: _generating
-                      ? null
-                      : (bool selected) => setState(() {
-                          if (selected) {
-                            _selectedTypes.add(label);
-                          } else {
-                            _selectedTypes.remove(label);
-                          }
-                        }),
-                ),
-            ],
+          // ---- 插件与题型 ----
+          PluginTypeSelector(
+            plugins: _plugins,
+            selectedPlugin: _plugin,
+            selectedTypes: _selectedTypes,
+            enabled: !_generating,
+            loading: _loadingPlugins,
+            onPluginChanged: _choosePlugin,
+            onTypeToggled: _toggleType,
           ),
           const SizedBox(height: 14),
 

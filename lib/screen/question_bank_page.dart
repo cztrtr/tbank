@@ -52,7 +52,7 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
     return _files
         .where(
           (QuestionBankFile file) =>
-              file.displayName.toLowerCase().contains(query),
+              file.displayPath.toLowerCase().contains(query),
         )
         .toList();
   }
@@ -180,13 +180,13 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
     unawaited(_scanFiles());
   }
 
-  /// 从 config.json 移除某个题库文件所在的目录记录，并释放 SAF 授权。
+  /// 从 config.json 移除某个题库文件所属的**根目录**记录，并释放 SAF 授权。
   ///
   /// 只删配置记录和目录授权，不删除磁盘上的任何文件。
-  /// 如果该目录下还有其它题库文件，它们也会一起从列表里消失。
+  /// 如果该目录下还有其它题库文件（含子目录里的），它们也会一起从列表里消失。
   Future<void> _removeDirectoryFor(QuestionBankFile file) async {
-    final String dirRef = file.directoryRef;
-    final String dirName = file.directoryName ?? BankIo.displayNameOf(dirRef);
+    final String dirRef = file.rootDirectoryRef;
+    final String dirName = BankIo.displayNameOf(dirRef);
 
     // AI 出题生成的目录是 App 内置的，不在 config.json 里，没有配置记录可移除
     if (!AppConfig.questionBankDirsNotifier.value.contains(dirRef)) {
@@ -389,12 +389,15 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
     );
   }
 
-  /// 把扫描结果按「父文件夹 → 子文件夹 → 题库」三级渲染。
+  /// 把扫描结果按「父文件夹 → 添加的文件夹 → 子目录 → 题库」渲染。
   ///
   /// 父文件夹是每个目录引用的上一层（见 [BankIo.parentOf]）：
   /// 同一父目录下添加的多个题库子目录会归到一组，
   /// 例如 `tbankQuestion/大学物理-振动`、`tbankQuestion/组织学` 都挂在
   /// `tbankQuestion` 下面。解析不出父级的目录退化成自己一组。
+  ///
+  /// 递归扫描到的一层子目录不拼在文件名里，而是作为「添加的文件夹」下面的
+  /// 小标题；题库按钮只显示最终文件名。
   List<Widget> _buildGroupedList(
     ColorScheme colorScheme,
     List<QuestionBankFile> visibleFiles,
@@ -406,19 +409,20 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
         <String, Map<String, List<QuestionBankFile>>>{};
 
     for (final QuestionBankFile file in visibleFiles) {
+      // 递归子目录的文件也要归到用户添加的那个根目录下
       final ({String key, String label})? parent = BankIo.parentOf(
-        file.directoryRef,
+        file.rootDirectoryRef,
       );
-      final String parentKey = parent?.key ?? file.directoryRef;
+      final String parentKey = parent?.key ?? file.rootDirectoryRef;
       parentLabels.putIfAbsent(
         parentKey,
-        () => parent?.label ?? BankIo.displayNameOf(file.directoryRef),
+        () => parent?.label ?? BankIo.displayNameOf(file.rootDirectoryRef),
       );
       // 没有可用的父级：这一组不画子文件夹标题，直接把文件列在父级下
       if (parent == null) virtualParents.add(parentKey);
       tree
           .putIfAbsent(parentKey, () => <String, List<QuestionBankFile>>{})
-          .putIfAbsent(file.directoryRef, () => <QuestionBankFile>[])
+          .putIfAbsent(file.rootDirectoryRef, () => <QuestionBankFile>[])
           .add(file);
     }
 
@@ -500,49 +504,110 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
           );
         }
 
+        // 根目录文件排最前，递归到的一层子目录各成一组、按名称排序
+        final Map<String, List<QuestionBankFile>> bySubDirectory =
+            <String, List<QuestionBankFile>>{};
         for (final QuestionBankFile file in files) {
-          children.add(
-            Padding(
-              padding: EdgeInsets.only(left: isVirtual ? 12 : 28, bottom: 8),
-              child: Row(
-                children: <Widget>[
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      // 把选中的题库交给父页面；MainScreen 会切到练习页
-                      onPressed: () => widget.onOpenBank(file),
-                      icon: const Icon(Icons.description_outlined),
-                      label: Text(
-                        file.displayName, // 只显示题库名，不带 .json 后缀
+          bySubDirectory
+              .putIfAbsent(file.subDirectory, () => <QuestionBankFile>[])
+              .add(file);
+        }
+
+        final List<String> subDirectories =
+            bySubDirectory.keys.toList()
+              ..sort((String a, String b) {
+                if (a.isEmpty) return b.isEmpty ? 0 : -1;
+                if (b.isEmpty) return 1;
+                return a.toLowerCase().compareTo(b.toLowerCase());
+              });
+
+        for (final String subDirectory in subDirectories) {
+          // 子目录标题：例如「组织学」下面的「1_组织学绪论」
+          if (subDirectory.isNotEmpty) {
+            children.add(
+              Padding(
+                padding: EdgeInsets.fromLTRB(
+                  isVirtual ? 14 : 28,
+                  8,
+                  0,
+                  2,
+                ),
+                child: Row(
+                  children: <Widget>[
+                    Icon(
+                      Icons.folder_outlined,
+                      size: 16,
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        subDirectory,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                      ),
-                      style: OutlinedButton.styleFrom(
-                        alignment: Alignment.centerLeft,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 14,
-                        ),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: colorScheme.onSurfaceVariant,
                         ),
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 4),
-                  IconButton(
-                    tooltip: 'AI 变式出题',
-                    // 读取这份题库的知识点，重新出题并保存为 xxx-alpha.json / xxx-beta.json…
-                    onPressed: () => _openVariantPage(file),
-                    icon: Icon(
-                      Icons.auto_awesome,
-                      size: 20,
-                      color: colorScheme.primary,
-                    ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-          );
+            );
+          }
+
+          for (final QuestionBankFile file
+              in bySubDirectory[subDirectory]!) {
+            children.add(
+              Padding(
+                padding: EdgeInsets.only(
+                  left: isVirtual
+                      ? (subDirectory.isEmpty ? 12 : 26)
+                      : (subDirectory.isEmpty ? 28 : 42),
+                  bottom: 8,
+                ),
+                child: Row(
+                  children: <Widget>[
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        // 把选中的题库交给父页面；MainScreen 会切到练习页
+                        onPressed: () => widget.onOpenBank(file),
+                        icon: const Icon(Icons.description_outlined),
+                        label: Text(
+                          file.displayName, // 只显示最终文件名，不带子目录
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        style: OutlinedButton.styleFrom(
+                          alignment: Alignment.centerLeft,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 14,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    IconButton(
+                      tooltip: 'AI 变式出题',
+                      // 读取这份题库的知识点，重新出题并保存为 xxx-alpha.json / xxx-beta.json…
+                      onPressed: () => _openVariantPage(file),
+                      icon: Icon(
+                        Icons.auto_awesome,
+                        size: 20,
+                        color: colorScheme.primary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }
         }
       }
     }

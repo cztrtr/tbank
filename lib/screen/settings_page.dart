@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../services/app_config.dart';
 import '../services/mistake_books.dart';
 import '../services/update_service.dart';
+import 'plugins_page.dart';
 
 /// 设置页。
 ///
@@ -254,6 +255,27 @@ class _SettingsPageState extends State<SettingsPage> {
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : const Text('保存'),
+            ),
+          ),
+
+          const SizedBox(height: 28),
+          const Divider(),
+          const SizedBox(height: 16),
+
+          // ---- 插件管理 ----
+          Card(
+            margin: EdgeInsets.zero,
+            child: ListTile(
+              leading: Icon(
+                Icons.extension_outlined,
+                color: colorScheme.primary,
+              ),
+              title: const Text('插件管理'),
+              subtitle: const Text('导入 / 下载 / 卸载题库插件'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(builder: (_) => const PluginsPage()),
+              ),
             ),
           ),
 

@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:tbank/services/ai_question_generator.dart';
 
+import 'dart:convert';
 import 'dart:io';
 
 /// 把 App 私有目录固定到临时文件夹，方便在桌面测试。
@@ -261,6 +262,44 @@ void main() {
 
       await AiQuestionGenerator.deleteBank(bank);
       expect(await AiQuestionGenerator.listBanks(), isEmpty);
+    });
+
+    test('插件自定义题型保留标识，文件根写入 plugin', () async {
+      final String raw = jsonEncode(<String, dynamic>{
+        'questions': <Map<String, dynamic>>[
+          <String, dynamic>{
+            'id': 'Q001',
+            'type': 'coding',
+            'question': '写一个函数',
+            'image': '',
+            'options': <dynamic>[],
+            'correctAnswer': <String>['def f(): pass'],
+            'analysis': '',
+            'stats': <String, dynamic>{'attemptCount': 0, 'wrongCount': 0},
+          },
+        ],
+      });
+      final List<Map<String, dynamic>> parsed =
+          AiQuestionGenerator.parseQuestions(
+            raw,
+            allowedTypes: <String>{'coding'},
+          );
+      expect(parsed.single['type'], 'coding');
+
+      final AiBankInfo bank = await AiQuestionGenerator.saveBatchTo(
+        topic: '插件题',
+        baseName: 'coding-1',
+        questions: parsed,
+        batchIndex: 1,
+        plugin: 'coding',
+        pluginVersion: 1,
+      );
+      final Map<String, dynamic> saved = jsonDecode(
+        await File(bank.path).readAsString(),
+      ) as Map<String, dynamic>;
+      expect(saved['plugin'], 'coding');
+      expect(saved['pluginVersion'], 1);
+      expect((saved['questions'] as List<dynamic>).first['type'], 'coding');
     });
   });
 }
