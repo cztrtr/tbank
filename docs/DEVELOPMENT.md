@@ -65,36 +65,26 @@
   - 单个题库文件损坏时跳过，不影响整体统计
 - AI 出题
   - 入口在「我的 → AI 出题」，需要已配置 DeepSeek 密钥
-  - 输入主题（作为文件夹名）与出题要求，勾选题型（单选/多选/判断/填空/名词解释/解答/证明），选择题目数量（5~100）
-  - 填空、名词解释、解答、证明在数据层统一为 `fill_blank`（options 为空数组，correctAnswer 是参考答案文本）
-  - 按「每本最多 25 道」分批生成保存到 App 私有目录：`Question/<主题>/<主题>-<时间戳>-<批次>.json`，格式与普通题库一致
-  - 题目经过校验（题型合法、选择题选项 ≥2、答案 key 在选项内、主观题有答案文本），不合法题跳过；id 全局连续重编 Q001…
-  - 页面下方列出已生成题库（按主题分组），点开直接练习；答错的题同样进错题本
-  - `Question/` 下的题库同时显示在「管理」页（QuestionBankPage 会额外扫描该内置目录）
-  - 出题类请求的超时放宽到 300 秒（`_generationTimeout`），判分/解析等仍用 120 秒
+  - 先选**出题插件**，页面只列出该插件 manifest 的题型；再选题型、输入主题与要求、题目数量（5~100）
+  - standard 的 manifest 声明四种数据题型：单选 / 多选 / 判断 / 填空（说明里覆盖名词解释、解答、证明）
+  - 生成 Prompt 由「用户要求 + 插件 typeDescriptions + typeSchemas/typeExamples」组成，App 不再硬编码题型说明
+  - 按题型配额生成：每个已选题型至少 1 道，返回不足或 `pluginData` 校验失败会立即重试，默认每题型最多 4 次；全部覆盖后才落盘
+  - 每本最多 25 道，保存到 `Question/<主题>/<主题>-<时间戳>-<批次>.json`；根节点写 `plugin` / `pluginVersion`
+  - 标准题型继续校验选项数量/答案 key；自定义题型只校验通用字段，`pluginData` 按插件 schema 校验
+  - 页面下方列出已生成题库，答错的题同样进错题本；`Question/` 下的题库也会显示在「管理」页
 - 拍书出题
   - 入口在「我的 → 拍书出题」，拍照或从相册选 1~3 张图片（压缩到长边 1600）
-  - 图片可以是题目（模仿出同类型新题）或知识点讲解（围绕内容出题），可填写具体出题要求
+  - 图片可以是题目或知识点讲解；出题插件、题型、schema 与 AI 出题共用
   - 保存位置可自定义：`Question/<一级目录>[/<二级目录>]/<文件名>.json`；
     二级目录与文件名可留空，自动用「一级目录-时间戳」命名，多批时追加 `-2`、`-3`
-  - **不会覆盖已有题库**：生成前用 `AiQuestionGenerator.reserveBaseName()`
-    预留基名，目录里已有同名文件时自动改成 `<名字>-2`、`<名字>-3`…；
-    `saveBatchTo()` 落盘时还会再查一次，双保险
-  - 页面下方列出 `Question/` 里已有的全部题库（按一级 / 二级目录分组），
-    每行右侧的垃圾桶经二次确认后**彻底删除**该 `.json`（`deleteBank()`），
-    顺带清掉删空的二级 / 一级目录，`Question/` 根目录保留
-  - 保存后由管理页 / 错题本 / 统计页的 AI 题库扫描（两级）统一发现
+  - **不会覆盖已有题库**：`reserveBaseName()` 预留基名，`saveBatchTo()` 落盘时再查一次
+  - 页面下方列出 `Question/` 里已有的全部题库，二次确认后可彻底删除（连同空目录）
 - AI 变式出题
-  - 入口在「管理」页每个题库右侧的 ✨ 按钮，针对用户已有的 `.json` 题库
-  - 读取题干/选项/答案/解析后，先调 AI 归纳**具体知识点**（`{"knowledgePoints":[...]}`），
-    再按知识点分批重新出题（换情景/换数据/换问法，不照抄原题）
-  - 新题保存回**原题库所在目录**，文件名按希腊字母递增：
-    `<原名>-alpha.json` → `<原名>-beta.json` → …（24 个字母用完后接序号 `-alpha-2`）；
-    自动跳过已占用的名字，不覆盖已有题库
-  - 默认题数与原题库一致（上限 100），题型默认沿用原题库出现过的题型；
-    可选完整题型：单选 / 多选 / 判断 / 填空 / 名词解释 / 解答 / 证明，
-    后四种在数据层统一为 `fill_blank`
-  - 新题 id 从 `Q001` 重编、stats 归零、`image` 置空；格式与普通题库完全一致
+  - 入口在「管理」页每个题库右侧的 ✨ 按钮
+  - 读取题干/选项/答案/解析后，先调 AI 归纳**具体知识点**，再按源题库所属插件的题型配额重新出题
+  - 题型、说明、schema 都来自源题库的插件；生成文件根节点继承源题库的 `plugin` / `pluginVersion`
+  - 新题保存回原题库目录，文件名按希腊字母递增：`<原名>-alpha.json` → `-beta.json`…；自动跳过已占用名字
+  - 默认题数与原题库一致（上限 100），id 从 `Q001` 重编、stats 归零、`image` 置空
   - 归纳知识点时最多均匀采样 60 道原题，避免提示词过长
 - 应用更新
   - 入口在「设置」页：填 cpolar 地址 → 下载 `app-release.apk` → 拉起系统安装器
@@ -152,6 +142,9 @@ lib/
 │   ├── ai_question_generator.dart  # AI 出题：生成、校验、落盘到 Question/
 │   ├── variant_question_generator.dart # AI 变式出题：读题库→归纳知识点→按希腊字母命名写回同目录
 │   ├── update_service.dart         # 应用更新：下载 APK + 调起系统安装器
+│   ├── plugin_manager.dart         # 插件目录、manifest、安装/卸载、配置读写
+│   ├── plugin_runtime.dart         # 插件 WebView 运行时开关
+│   ├── plugin_schema.dart          # pluginData 的轻量 JSON Schema 校验
 │   └── mistake_books.dart          # 错题本收集、分本、计数
 ├── screen/
 │   ├── main_screen.dart            # 底部导航 + IndexedStack
@@ -161,20 +154,26 @@ lib/
 │   ├── practice_persistence.dart   # 保存/防抖/回拷/断点
 │   ├── practice_ai_service.dart    # AI 判分、AI 解析、题目配图读取
 │   ├── answer_image_picker.dart    # 作答图片选择与压缩（4 张 / 5 MB / 10 MB）
-│   ├── practice_question_view.dart # 单题 UI（题干/选项/输入/结果/解析）
+│   ├── practice_question_view.dart # 原生单题 UI（测试/关闭插件运行时）
 │   ├── practice_page.dart          # 练习页：加载、状态编排、完成页
+│   ├── plugin_practice_view.dart   # 插件练习 WebView 宿主
+│   ├── plugin_config_page.dart     # 插件 config.html 配置页宿主
+│   ├── plugin_type_selector.dart   # 出题页的插件 + 题型选择器
+│   ├── plugins_page.dart           # 插件管理页（导入/下载/卸载/齿轮）
 │   ├── mistake_books_page.dart     # 错题本二级页面（先展示再后台收集）
-│   ├── ai_generate_page.dart       # AI 出题页（表单 + 已生成题库列表）
-│   ├── book_ai_generate_page.dart  # 拍书出题页（拍照/相册 → 出题 → 自定义保存位置）
-│   ├── variant_generate_page.dart    # AI 变式出题页（知识点归纳 + 分批进度）
-│   ├── me_page.dart                # 个人中心，提供快速开始/统计/错题本/AI 出题/拍书出题/设置入口
-│   ├── quick_start_page.dart        # 快速开始：读取 assets/texts/quick_start.md 展示
-│   ├── stats_page.dart              # 学习统计：答题量、正确率、错题排行
+│   ├── ai_generate_page.dart       # AI 出题页（插件题型 + 已生成题库）
+│   ├── book_ai_generate_page.dart  # 拍书出题页（图片 + 插件题型）
+│   ├── variant_generate_page.dart  # AI 变式出题页（源题库插件 + 知识点）
+│   ├── me_page.dart                # 个人中心入口
+│   ├── quick_start_page.dart       # 快速开始
+│   ├── stats_page.dart             # 学习统计
 │   └── settings_page.dart          # 设置页
-└── widgets/
-    ├── quote_card.dart             # 首页语录卡：随机一句、点击换句
-    ├── question_image.dart         # 题目配图：加载 + 缺失/损坏占位
-    └── math_text.dart              # LaTeX 公式混合文本渲染（题干/选项/解析）
+├── widgets/
+│   ├── quote_card.dart             # 首页语录卡
+│   ├── question_image.dart         # 题目配图
+│   └── math_text.dart              # LaTeX 公式混合文本
+assets/plugins/standard/            # 内置 standard：manifest/HTML/JS/CSS/KaTeX/普惠体
+docs/PLUGIN_DEVELOPMENT.md          # 第三方插件完整开发文档
 ```
 
 CI 配置在 `.github/workflows/flutter.yml`：push / PR 时跑 `flutter analyze` 和
@@ -201,7 +200,7 @@ flutter run
 # 通用包：一个 APK 含全部 ABI（约 60 MB）
 flutter build apk --release
 
-# 推荐发布：按 ABI 拆分，单个包约 20-25 MB
+# 推荐发布：按 ABI 拆分，单个包约 25-29 MB（含普惠体和 KaTeX）
 flutter build apk --release --split-per-abi
 ```
 
@@ -602,18 +601,24 @@ ValueListenableBuilder<List<String>>(
 
 ### 3. 新增题型
 
-1. 在 `QuestionType` 增加枚举和 `value`；
-2. 在 `QuestionType.parse` 中能识别；
-3. `Question.toJson` 里 `correctAnswer` 始终写成数组；
-4. `PracticePage._buildQuestion` 增加对应 UI；
-5. 判分逻辑放在 `_submitChoice` 或新增方法里，最后统一走 `_recordAnswer`。
+第三方题型不需要改 App 的 `QuestionType` 枚举，走插件即可：
+
+1. 在插件 `manifest.json` 的 `types` 里声明题型 id；
+2. 补 `typeNames` / `typeDescriptions`，需要私有字段再补 `typeSchemas` / `typeExamples`；
+3. 在插件 `index.html` / `app.js` 里渲染该题型，提交时调 `tbankSubmit`；
+4. 私有字段放 `pluginData`，需要修改时调 `tbankUpdatePluginData`；
+5. 打包 zip，在「设置 → 插件管理」安装。
+
+只有要新增 **App 内置原生题型** 时，才需要改 `QuestionType`、`QuestionCodec` 和原生
+`PracticeQuestionView`；详细插件协议见 [插件开发指南](PLUGIN_DEVELOPMENT.md)。
 
 ### 4. 修改判分 / 统计
 
 - 选择题判分在 `PracticePage._submitChoice`，目前是“集合完全相等”；
-- 统计更新在 `_recordAnswer`，统一处理 `attemptCount` / `wrongCount`；
-- 保存时机在 `_recordAnswer` 末尾的 `_persist`；
-- 回拷时机在 `_next` 的完成分支、`didChangeAppLifecycleState`、`dispose`、换题库前的 `_loadBank`。
+- 插件题型的判分由插件通过 `tbankSubmit` 回传；
+- 统计更新统一在 `_recordAnswer`，处理 `attemptCount` / `wrongCount`；
+- 保存由 `PracticePersistence` 400ms 防抖写入工作副本，完成/后台/销毁/换题库时回拷；
+- 断点保存在 `PracticeProgress`，不保存未提交的输入和作答图片。
 
 ### 5. 读取题库数据
 
@@ -783,6 +788,9 @@ kotlin.incremental=false
 - **assets 体积**：`assets/images/home_bg/` 的背景图已压缩为 WebP（约 2.8 MB），以后新增图片建议同样压缩后再放入。
 
 ## 插件系统
+
+第三方插件的完整 manifest、桥接口、`pluginData`、配置页和示例见
+[插件开发指南](PLUGIN_DEVELOPMENT.md)。
 
 ### 目录与清单
 
