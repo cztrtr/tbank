@@ -435,6 +435,11 @@
     s = s.replace(/\\\[([\s\S]*?)\\\]/g, function (_, body) {
       return '$$' + body.trim() + '$$';
     });
+    // fmt() 会把换行变成 <br>，而 auto-render 无法跨 <br> 匹配 $$
+    // 块；先把 display math 内部压成一行，保证公式落在一个文本节点里。
+    s = s.replace(/\$\$([\s\S]*?)\$\$/g, function (_, body) {
+      return '$$' + body.replace(/\s+/g, ' ').trim() + '$$';
+    });
     return s;
   }
 
