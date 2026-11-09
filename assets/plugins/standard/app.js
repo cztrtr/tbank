@@ -206,13 +206,14 @@
         (ctx.index <= 0 ? ' disabled' : '') + '>上一题</button>' +
         '<button class="outline" data-action="show">展示答案</button></div>';
       html += '<div class="row">' +
-        '<button class="outline" data-action="pick-image">拍照 / 选图</button>';
+        '<button class="outline" data-action="pick-camera">拍照</button>' +
+        '<button class="outline" data-action="pick-gallery">从相册选择</button></div>';
       if (ctx.aiEnabled) {
-        html += '<button class="primary" data-action="ai-submit"' +
+        html += '<div class="row">' +
+          '<button class="primary" data-action="ai-submit"' +
           (aiScoring ? ' disabled' : '') + '>' +
-          (aiScoring ? 'AI 判分中…' : '提交（AI 判分）') + '</button>';
+          (aiScoring ? 'AI 判分中…' : '提交（AI 判分）') + '</button></div>';
       }
-      html += '</div>';
       if (aiError) {
         html += '<div class="hint" style="color:var(--bad)">' + fmt(aiError) + '</div>';
       }
@@ -362,8 +363,10 @@
           requestAi();
         } else if (action === 'ai-submit') {
           submitFillAi();
-        } else if (action === 'pick-image') {
-          pickImage();
+        } else if (action === 'pick-camera') {
+          pickImage('camera');
+        } else if (action === 'pick-gallery') {
+          pickImage('gallery');
         }
       });
     });
@@ -431,14 +434,14 @@
     }
   }
 
-  async function pickImage() {
+  async function pickImage(source) {
     if (answerImages.length >= 4) {
       aiError = '最多上传 4 张作答图片';
       render();
       return;
     }
     try {
-      var result = await hostCall('tbankPickImage', { source: 'gallery' });
+      var result = await hostCall('tbankPickImage', { source: source });
       if (result && result.dataUrl) {
         answerImages.push(result.dataUrl);
         aiError = '';
