@@ -283,9 +283,44 @@
           console.warn('KaTeX 渲染警告：' + message);
         }
       });
+      fitDisplayMath();
     } catch (error) {
       // 公式渲染失败时保留原文，不影响作答
     }
+  }
+
+  /**
+   * 让超宽的独立公式按卡片宽度等比缩小。
+   *
+   * KaTeX 的 display math 默认不换行，长推导会横向溢出并被裁掉；
+   * 这里量一次实际宽度，放不下就 scale；缩到下限仍超宽时交给 CSS 横向滚动。
+   */
+  function fitDisplayMath() {
+    window.requestAnimationFrame(function () {
+      var displays = document.querySelectorAll('.katex-display');
+      displays.forEach(function (display) {
+        var katex = display.querySelector('.katex');
+        if (!katex) return;
+
+        katex.style.transform = '';
+        katex.style.transformOrigin = 'left top';
+        display.style.height = '';
+        display.style.overflowX = '';
+        display.style.overflowY = '';
+        display.style.textAlign = '';
+
+        var available = display.clientWidth;
+        var width = katex.scrollWidth;
+        if (!available || !width || width <= available + 1) return;
+
+        var scale = Math.max(0.55, available / width);
+        display.style.textAlign = 'left';
+        katex.style.transform = 'scale(' + scale + ')';
+        display.style.height = (katex.offsetHeight * scale) + 'px';
+        display.style.overflowX = scale <= 0.56 ? 'auto' : 'hidden';
+        display.style.overflowY = 'hidden';
+      });
+    });
   }
 
   function bind() {

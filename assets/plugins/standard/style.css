@@ -240,6 +240,13 @@ button:disabled { opacity: .45; cursor: default; }
 .card.analysis { background: var(--bg); }
 .card.analysis .card-title { color: var(--muted); }
 
+.katex-display {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 0;
+}
+
 .card-title { font-size: 13px; font-weight: 700; margin-bottom: 6px; }
 .card.ok .card-title { color: var(--ok); }
 .card.bad .card-title { color: var(--bad); }

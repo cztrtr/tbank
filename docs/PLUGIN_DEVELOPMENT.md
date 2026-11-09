@@ -221,6 +221,8 @@ const text = await call('tbankAiComplete', {
 - standard 的 `normalizeAiMath()` 会把模型偶发的 `\(...\)`、`\[...\]` 和
   Markdown 围栏统一成 `$...$` / `$$...$$`，并把多行 `$$` 块内部换行压平，
   避免 `fmt()` 的 `<br>` 把公式拆成多个文本节点；
+- `fitDisplayMath()` 会在渲染后测量独立公式宽度，超宽时按卡片宽度等比缩小，
+  缩到下限仍超宽则保留横向滚动，避免公式被右侧裁掉；
 - `tbankAiExplain` 是旧接口，App 内置 Prompt，只用于兼容旧插件；
 - standard 的 `app.js` 里有完整的 `buildAiPrompt()` 示例。
 
