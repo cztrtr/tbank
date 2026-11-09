@@ -48,6 +48,14 @@ class PracticeAiService {
     );
   }
 
+  /// 通用 AI 补全；Prompt 由插件生成，App 只转发。
+  static Future<String> complete({
+    required String prompt,
+    List<Uint8List> images = const <Uint8List>[],
+  }) {
+    return DsApiService.complete(prompt: prompt, images: images);
+  }
+
   /// 生成题目解析；主观题带上作答文字和作答图片。
   static Future<String> explain(
     Question question, {

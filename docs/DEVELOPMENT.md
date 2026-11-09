@@ -490,7 +490,8 @@ HTTP 传输（非流式 / 流式 / SSE 解析 / 错误翻译）拆在 `ds_transp
 | --- | --- |
 | `ask(content, stream:, thinking:)` | 通用问答；`thinking` 控制是否启用思考模式 |
 | `scoreAnswer(question:, standardAnswer:, userAnswer:, imageBytes:, answerImages:)` | 给主观题打 0-10 分，供填空/解释题判分；`imageBytes` 是题目配图，`answerImages` 是学生上传的作答图片（可多张） |
-| `explainQuestion(question:, options:, correctAnswer:, imageBytes:)` | 生成选择题解析，供「AI 解析」按钮使用 |
+| `complete(prompt:, images:)` | 通用 AI 补全：Prompt 由插件提供，App 只负责鉴权/发送/返回文本 |
+| `explainQuestion(question:, options:, correctAnswer:, imageBytes:)` | 旧解析入口：App 内置 Prompt，保留给原生回退和旧插件 |
 | `extractKnowledgePoints(bankName:, questionsText:)` | 通读题库摘要，归纳知识点，返回 `List<String>` |
 | `generateQuestionsFromKnowledge(topic:, knowledgePoints:, types:, count:)` | 围绕知识点生成变式题，返回原始 JSON 文本 |
 | `parseKnowledgePoints(raw)` | 解析知识点 JSON，容忍代码围栏与多余文字 |
@@ -853,7 +854,8 @@ App 通过统一桥接提供：
 | `tbankSubmit` | 插件提交 `{correct, selected}`，App 更新统计/错题本 |
 | `tbankUpdatePluginData` | `{pluginData: {...}}`，按题型 schema 校验后写回当前题 |
 | `tbankNext` / `tbankPrevious` | 上一题 / 下一题 |
-| `tbankAiExplain` | 宿主代调 AI 解析，Key 不下发给插件 |
+| `tbankAiComplete` | 插件自己拼 Prompt，App 只负责发请求 |
+| `tbankAiExplain` | 旧接口：宿主代调 AI 解析（App 内置 Prompt），保留兼容 |
 | `tbankAiScore` | 宿主代调主观题判分，返回 0-10 |
 | `tbankReadBank` | 只读当前题库 JSON |
 | `tbankReadImage` | 读题库目录里的图片，返回 data URL |

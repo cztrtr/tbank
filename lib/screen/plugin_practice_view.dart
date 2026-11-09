@@ -43,6 +43,7 @@ class PluginPracticeView extends StatefulWidget {
     required this.onPrevious,
     required this.onRequestAiExplain,
     required this.onRequestAiScore,
+    required this.onRequestAiComplete,
     required this.onUpdatePluginData,
   });
 
@@ -66,9 +67,11 @@ class PluginPracticeView extends StatefulWidget {
   final VoidCallback onPrevious;
   final Future<String> Function(String answer) onRequestAiExplain;
   final Future<int> Function(String answer, List<Uint8List> images)
-  onRequestAiScore;
+      onRequestAiScore;
+  final Future<String> Function(String prompt, List<Uint8List> images)
+      onRequestAiComplete;
   final Future<void> Function(Map<String, dynamic> pluginData)
-  onUpdatePluginData;
+      onUpdatePluginData;
 
   @override
   State<PluginPracticeView> createState() => _PluginPracticeViewState();
@@ -243,6 +246,19 @@ class _PluginPracticeViewState extends State<PluginPracticeView> {
           result = await widget.onRequestAiScore(
             args['answer']?.toString() ?? '',
             images,
+          );
+          break;
+        case 'tbankAiComplete':
+          final List<Uint8List> completeImages = args['images'] is List
+              ? (args['images'] as List)
+                    .map((dynamic item) => _decodeDataUrl(item.toString()))
+                    .whereType<Uint8List>()
+                    .take(6)
+                    .toList()
+              : <Uint8List>[];
+          result = await widget.onRequestAiComplete(
+            args['prompt']?.toString() ?? '',
+            completeImages,
           );
           break;
         case 'tbankReadBank':

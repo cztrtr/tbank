@@ -415,6 +415,59 @@
     }
   }
 
+  function buildAiPrompt(studentAnswer) {
+    var q = ctx.question;
+    var isFill = q.type === 'fill_blank';
+    var options = (q.options || []).map(function (option) {
+      return option.key + '. ' + option.text;
+    }).join('\n');
+    var selectedText = (q.options || []).filter(function (option) {
+      return (ctx.selected || []).indexOf(option.key) >= 0;
+    }).map(function (option) {
+      return option.key + '. ' + option.text;
+    }).join(' / ');
+
+    var lines = [
+      '你是大学课程答疑老师。请针对下面这道题给出解析。',
+      '',
+      '要求：'
+    ];
+    if (options) {
+      lines.push(
+        '- 说明正确答案为什么正确；',
+        '- 简要说明其它选项为什么不对；'
+      );
+    } else {
+      lines.push(
+        '- 给出清晰的解题思路和完整推导步骤；',
+        '- 如果附有学生作答，指出思路是否正确、错在哪里、应如何改正；'
+      );
+    }
+    lines.push(
+      '- 如果有附图，结合图片内容解释；',
+      '- 数学表达式一律用 LaTeX 表示：行内公式用 $...$，独立公式用 $$...$$；',
+      '- 每个公式都必须完整包在 $...$ 或 $$...$$ 里，禁止把 \\frac、\\sqrt 等命令裸写在正文中，',
+      '  例如必须写 $\\frac{1}{2}$，不能写 \\frac{1}{2}；',
+      '- 不要使用 \\(...\\) 或 \\[...\\] 作为公式分隔符；',
+      '- 公式内不要夹杂中文，需要中文说明时写在公式外面；',
+      '- 不要用 Unicode 符号或纯文本凑合（例如写 $x^2$ 而不是 x^2）；',
+      '- 输出纯文本，不要 Markdown 标记、不要用星号或井号分点；',
+      '- 控制在 300 字以内。',
+      '',
+      '题目：' + q.question
+    );
+    if (options) {
+      lines.push('', '选项：', options);
+    }
+    lines.push('', '正确答案：' + (ctx.correctAnswerText || ''));
+    if (isFill && studentAnswer) {
+      lines.push('', '学生作答：' + studentAnswer);
+    } else if (!isFill && selectedText) {
+      lines.push('', '学生选择：' + selectedText);
+    }
+    return lines.join('\n');
+  }
+
   async function requestAi() {
     if (aiLoading) return;
     aiLoading = true;
@@ -422,7 +475,15 @@
     try {
       var textarea = document.getElementById('answer');
       var answer = textarea ? textarea.value : answerText;
-      var result = await hostCall('tbankAiExplain', { answer: answer });
+      var images = [];
+      if (ctx.question.imageDataUrl) images.push(ctx.question.imageDataUrl);
+      if (ctx.question.type === 'fill_blank') {
+        images = images.concat(answerImages);
+      }
+      var result = await hostCall('tbankAiComplete', {
+        prompt: buildAiPrompt(answer),
+        images: images
+      });
       aiText = typeof result === 'string' ? result : '（AI 没有返回内容）';
     } catch (error) {
       aiText = 'AI 解析失败：' + (error && error.message ? error.message : error);

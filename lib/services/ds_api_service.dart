@@ -232,6 +232,38 @@ ${studentAnswer.isEmpty ? '' : '\n学生作答：$studentAnswer'}
     return trimmed;
   }
 
+  /// 通用 AI 补全：Prompt 由插件自己生成，App 只负责发送、鉴权和返回文本。
+  ///
+  /// [images] 是插件传入的附图（题目配图 / 作答图片），以 data URL 解码后
+  /// 作为 `image_url` 内容块发送。Prompt 长度限制 20K 字符，防止插件误发超大文本。
+  static Future<String> complete({
+    required String prompt,
+    List<Uint8List> images = const <Uint8List>[],
+  }) async {
+    final String trimmed = prompt.trim();
+    if (trimmed.isEmpty) {
+      throw DsApiException('AI Prompt 不能为空');
+    }
+    if (utf8.encode(trimmed).length > 20000) {
+      throw DsApiException('AI Prompt 太长（超过 20 KB）');
+    }
+
+    final String text = await _send(
+      _withImages(
+        trimmed,
+        answerImages: images,
+        answerImagesLabel: '附图',
+      ),
+      stream: false,
+      thinking: false,
+    );
+    final String result = text.trim();
+    if (result.isEmpty) {
+      throw DsApiException('AI 未返回内容');
+    }
+    return result;
+  }
+
   /// 让 AI 根据主题和要求生成一整套练习题，返回模型输出的原始 JSON 文本。
   ///
   /// [count] 是这一批生成的题目数量（调用方按每本上限分批调用）。

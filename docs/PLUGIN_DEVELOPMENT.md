@@ -161,7 +161,8 @@ window.__tbankReject(id, message)
 | --- | --- | --- |
 | `tbankSubmit` | `{correct, selected}` | `true`，App 更新统计/错题本 |
 | `tbankNext` / `tbankPrevious` | 无 | `true` |
-| `tbankAiExplain` | `{answer}` | AI 解析文本 |
+| `tbankAiComplete` | `{prompt, images?: [dataUrl]}` | AI 返回文本；Prompt 由插件自己生成 |
+| `tbankAiExplain` | `{answer}` | 旧接口：App 生成解析 Prompt，保留兼容 |
 | `tbankAiScore` | `{answer, images: [dataUrl]}` | `0-10` 整数 |
 | `tbankReadBank` | 无 | 当前题库原始 JSON 文本 |
 | `tbankReadImage` | `{name}` | `{dataUrl}` |
@@ -202,10 +203,30 @@ window.__tbankConfigReceive({
 
 配置保存在 `plugins/<id>/config.json`，升级插件时保留、卸载时删除，最大 256 KB。
 
-## 6. AI 出题约定
+## 6. AI 解析与出题
 
-出题界面按插件列出题型；App 把用户要求和插件的 `typeDescriptions`、`typeSchemas`、`typeExamples` 一起发给模型。
+### AI 解析
 
+解析的 Prompt 由**插件自己生成**，然后调用：
+
+```js
+const text = await call('tbankAiComplete', {
+  prompt: buildExplainPrompt(...),
+  images: [questionImageDataUrl, ...answerImageDataUrls]
+});
+```
+
+- App 只负责鉴权、发送请求和返回文本；
+- 插件可以按自己的题型组织题目、选项、标准答案、学生作答；
+- `tbankAiExplain` 是旧接口，App 内置 Prompt，只用于兼容旧插件；
+- standard 的 `app.js` 里有完整的 `buildAiPrompt()` 示例。
+
+### AI 出题
+
+AI 出题、拍书出题、变式出题仍由 App 处理题目生成逻辑：
+
+- 出题界面按插件列出题型；
+- App 把用户要求和插件的 `typeDescriptions`、`typeSchemas`、`typeExamples` 一起发给模型；
 - 每道题的 `type` 必须是插件声明的 id；
 - 有 `typeSchemas` 的题型，`pluginData` 必须存在并通过校验；
 - 生成按题型配额进行，每个已选题型至少 1 道；

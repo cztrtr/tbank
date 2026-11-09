@@ -642,6 +642,12 @@ class _PracticePageState extends State<PracticePage>
             sourceDirectoryRef: _storage?.sourceDirectoryRef,
           );
         },
+        onRequestAiComplete: (String prompt, List<Uint8List> images) async {
+          if ((AppConfig.dsApiKey ?? '').trim().isEmpty) {
+            throw DsApiException('未配置 DeepSeek API Key');
+          }
+          return PracticeAiService.complete(prompt: prompt, images: images);
+        },
         onUpdatePluginData: (Map<String, dynamic> data) async {
           final QuestionBank? bank = _questions;
           if (bank == null || _index >= bank.questions.length) return;
