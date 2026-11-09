@@ -277,7 +277,11 @@
           { left: '\\(', right: '\\)', display: false },
           { left: '\\[', right: '\\]', display: true }
         ],
-        throwOnError: false
+        throwOnError: false,
+        strict: false,
+        errorCallback: function (message) {
+          console.warn('KaTeX 渲染警告：' + message);
+        }
       });
     } catch (error) {
       // 公式渲染失败时保留原文，不影响作答
@@ -415,6 +419,25 @@
     }
   }
 
+  /**
+   * AI 返回的公式分隔符不稳定：同一个模型可能随机使用
+   * $...$ / $$...$$ / \(...\) / \[...\]，还偶尔包 Markdown 围栏。
+   * 统一转成 KaTeX auto-render 最稳定的 $...$ / $$...$$。
+   */
+  function normalizeAiMath(text) {
+    var s = String(text || '');
+    s = s.replace(/```(?:latex|tex|math)?\s*([\s\S]*?)```/gi, function (_, body) {
+      return body.trim();
+    });
+    s = s.replace(/\\\(([\s\S]*?)\\\)/g, function (_, body) {
+      return '$' + body.trim() + '$';
+    });
+    s = s.replace(/\\\[([\s\S]*?)\\\]/g, function (_, body) {
+      return '$$' + body.trim() + '$$';
+    });
+    return s;
+  }
+
   function buildAiPrompt(studentAnswer) {
     var q = ctx.question;
     var isFill = q.type === 'fill_blank';
@@ -484,7 +507,9 @@
         prompt: buildAiPrompt(answer),
         images: images
       });
-      aiText = typeof result === 'string' ? result : '（AI 没有返回内容）';
+      aiText = typeof result === 'string'
+        ? normalizeAiMath(result)
+        : '（AI 没有返回内容）';
     } catch (error) {
       aiText = 'AI 解析失败：' + (error && error.message ? error.message : error);
     } finally {

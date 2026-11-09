@@ -218,6 +218,8 @@ const text = await call('tbankAiComplete', {
 
 - App 只负责鉴权、发送请求和返回文本；
 - 插件可以按自己的题型组织题目、选项、标准答案、学生作答；
+- standard 的 `normalizeAiMath()` 会把模型偶发的 `\(...\)`、`\[...\]` 和
+  Markdown 围栏统一成 `$...$` / `$$...$$`，再用 KaTeX 渲染；
 - `tbankAiExplain` 是旧接口，App 内置 Prompt，只用于兼容旧插件；
 - standard 的 `app.js` 里有完整的 `buildAiPrompt()` 示例。
 
