@@ -91,6 +91,128 @@
     return node;
   }
 
+  function escapeAiHtml(value) {
+    return String(value === undefined || value === null ? "" : value)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  // AI 返回的公式分隔符不稳定：可能混用 $...$ / $$...$$ / \(...\) / \[...\]，
+  // 还可能把公式包在 ```latex 围栏里。统一成 renderRich 认识的 $ / $$。
+  function normalizeAiMath(text) {
+    var value = String(text === undefined || text === null ? "" : text);
+    value = value.replace(/```(?:latex|tex|math)\s*([\s\S]*?)```/gi, function (_, body) {
+      return "\n$$" + body.replace(/\s+/g, " ").trim() + "$$\n";
+    });
+    value = value.replace(/\\\[([\s\S]*?)\\\]/g, function (_, body) {
+      return "\n$$" + body.replace(/\s+/g, " ").trim() + "$$\n";
+    });
+    value = value.replace(/\\\(([\s\S]*?)\\\)/g, function (_, body) {
+      return "$" + body.trim() + "$";
+    });
+    // 多行 display math 先压成一行，避免段落换行把它拆开
+    value = value.replace(/\$\$([\s\S]*?)\$\$/g, function (_, body) {
+      return "$$" + body.replace(/\s+/g, " ").trim() + "$$";
+    });
+    return value;
+  }
+
+  function inlineAiMarkdown(text) {
+    var html = typeof renderRich === "function" ? renderRich(text) : escapeAiHtml(text);
+    html = html.replace(/`([^`\n]+)`/g, function (_, code) {
+      return "<code>" + code + "</code>";
+    });
+    html = html.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+    html = html.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>");
+    return html;
+  }
+
+  function startsMarkdownBlock(line) {
+    return /^\s*(#{1,6})\s+/.test(line) ||
+      /^\s*([-*+])\s+/.test(line) ||
+      /^\s*\d+[.)]\s+/.test(line) ||
+      /^\s*>\s?/.test(line) ||
+      /^\s*```/.test(line) ||
+      /^\s*([-*_]\s*){3,}$/.test(line);
+  }
+
+  // AI 解析专用：支持标题、加粗/斜体、行内代码、围栏代码、列表、引用和 $...$ 公式。
+  function renderAiMarkdown(text) {
+    var lines = normalizeAiMath(text).replace(/\r\n?/g, "\n").split("\n");
+    var out = [];
+    var i = 0;
+    while (i < lines.length) {
+      var line = lines[i];
+      if (!line.trim()) {
+        i++;
+        continue;
+      }
+
+      if (/^\s*```/.test(line)) {
+        var code = [];
+        i++;
+        while (i < lines.length && !/^\s*```/.test(lines[i])) {
+          code.push(lines[i]);
+          i++;
+        }
+        if (i < lines.length) i++;
+        out.push("<pre><code>" + escapeAiHtml(code.join("\n")) + "</code></pre>");
+        continue;
+      }
+
+      var heading = line.match(/^\s*(#{1,6})\s+(.*)$/);
+      if (heading) {
+        var level = Math.min(6, heading[1].length);
+        out.push("<h" + level + ">" + inlineAiMarkdown(heading[2]) + "</h" + level + ">");
+        i++;
+        continue;
+      }
+
+      if (/^\s*([-*_]\s*){3,}$/.test(line)) {
+        out.push("<hr>");
+        i++;
+        continue;
+      }
+
+      var ordered = /^\s*\d+[.)]\s+/.test(line);
+      if (ordered || /^\s*[-*+]\s+/.test(line)) {
+        var items = [];
+        while (i < lines.length) {
+          var item = ordered
+            ? lines[i].match(/^\s*\d+[.)]\s+(.*)$/)
+            : lines[i].match(/^\s*[-*+]\s+(.*)$/);
+          if (!item) break;
+          items.push("<li>" + inlineAiMarkdown(item[1]) + "</li>");
+          i++;
+        }
+        out.push((ordered ? "<ol>" : "<ul>") + items.join("") + (ordered ? "</ol>" : "</ul>"));
+        continue;
+      }
+
+      if (/^\s*>\s?/.test(line)) {
+        var quote = [];
+        while (i < lines.length && /^\s*>\s?/.test(lines[i])) {
+          quote.push(lines[i].replace(/^\s*>\s?/, ""));
+          i++;
+        }
+        out.push("<blockquote>" + inlineAiMarkdown(quote.join(" ")) + "</blockquote>");
+        continue;
+      }
+
+      var paragraph = [line.trim()];
+      i++;
+      while (i < lines.length && lines[i].trim() && !startsMarkdownBlock(lines[i])) {
+        paragraph.push(lines[i].trim());
+        i++;
+      }
+      out.push("<p>" + inlineAiMarkdown(paragraph.join(" ")) + "</p>");
+    }
+    return out.join("\n");
+  }
+
   function setPhase(phase) {
     state.phase = phase;
     if (state.submitBtn) {
@@ -604,7 +726,7 @@
       card.appendChild(hRich("div", "explain", analysis));
     }
 
-    var explainNode = h("div", "explain");
+    var explainNode = h("div", "explain ai-rich");
     explainNode.hidden = true;
     state.explainNode = explainNode;
     card.appendChild(explainNode);
@@ -653,7 +775,7 @@
     var cacheKey = currentQuestionId();
     var cached = state.explainCache[cacheKey];
     if (cached) {
-      node.textContent = cached;
+      node.innerHTML = renderAiMarkdown(cached);
       return;
     }
     if (node.getAttribute("data-loading") === "1") return;
@@ -672,7 +794,7 @@
       function (text) {
         var value = String(text || "").trim() || "（AI 没有给出内容）";
         state.explainCache[cacheKey] = value;
-        node.innerHTML = richHtml(value);
+        node.innerHTML = renderAiMarkdown(value);
         node.removeAttribute("data-loading");
       },
       function (error) {
@@ -1019,6 +1141,7 @@
   globalThis.buildExplainPrompt = buildExplainPrompt;
   globalThis.createTimer = createTimer;
   globalThis.onTimeoutAction = onTimeoutAction;
+  globalThis.renderAiMarkdown = renderAiMarkdown;
 
   if (typeof document !== "undefined") {
     if (document.readyState === "loading") {

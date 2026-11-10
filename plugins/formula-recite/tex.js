@@ -158,6 +158,19 @@
           i = g.end;
           continue;
         }
+        if (name === "text" || name === "mathrm" || name === "operatorname" || name === "mathbf") {
+          var textGroup = readGroup(s, i);
+          out += '<span class="tex-text' + (name === "text" ? "" : " tex-" + name) + '">' +
+            escapeHtml(textGroup.text) + "</span>";
+          i = textGroup.end;
+          continue;
+        }
+        if (name === "overline" || name === "underline" || name === "boxed") {
+          var boxGroup = readGroup(s, i);
+          out += '<span class="tex-' + name + '">' + render(boxGroup.text) + "</span>";
+          i = boxGroup.end;
+          continue;
+        }
         if (Object.prototype.hasOwnProperty.call(GREEK, name)) {
           out += GREEK[name];
           continue;
@@ -255,6 +268,18 @@
           var g = readGroup(s, i);
           out += plain(g.text);
           i = g.end;
+          continue;
+        }
+        if (name === "text" || name === "mathrm" || name === "operatorname" || name === "mathbf") {
+          var textGroup = readGroup(s, i);
+          out += plain(textGroup.text);
+          i = textGroup.end;
+          continue;
+        }
+        if (name === "overline" || name === "underline" || name === "boxed") {
+          var boxGroup = readGroup(s, i);
+          out += plain(boxGroup.text);
+          i = boxGroup.end;
           continue;
         }
         if (Object.prototype.hasOwnProperty.call(GREEK, name)) { out += GREEK[name]; continue; }

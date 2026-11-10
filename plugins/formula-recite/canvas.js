@@ -165,6 +165,17 @@
   };
 
   DrawBoard.prototype.resize = function () {
+    // 画布固定为滚动容器的 2 倍；用显式像素尺寸兜底，
+    // 避免部分 WebView 对 `height: 200%` 解析成 auto，导致没有纵向滚动条。
+    var parent = this.canvas.parentElement;
+    if (parent && parent.clientWidth > 0 && parent.clientHeight > 0) {
+      var wantWidth = Math.round(parent.clientWidth * 2);
+      var wantHeight = Math.round(parent.clientHeight * 2);
+      var wantWidthCss = wantWidth + "px";
+      var wantHeightCss = wantHeight + "px";
+      if (this.canvas.style.width !== wantWidthCss) this.canvas.style.width = wantWidthCss;
+      if (this.canvas.style.height !== wantHeightCss) this.canvas.style.height = wantHeightCss;
+    }
     var rect = this.canvas.getBoundingClientRect();
     var dpr = (typeof window !== "undefined" && window.devicePixelRatio) || 1;
     var width = Math.max(1, Math.round(rect.width));
