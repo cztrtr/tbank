@@ -119,12 +119,12 @@ body { overscroll-behavior: none; }
   background: #ffffff;
   overflow: scroll;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
+  scrollbar-width: auto;
   scrollbar-color: var(--line) transparent;
 }
 
 /* 让下方/右侧滚动条一直有可见的拖动条，画布可以写到视口外。 */
-.board-wrap::-webkit-scrollbar { width: 10px; height: 10px; }
+.board-wrap::-webkit-scrollbar { width: 25px; height: 25px; }
 .board-wrap::-webkit-scrollbar-track { background: transparent; }
 .board-wrap::-webkit-scrollbar-thumb {
   background: #c7c7cf;
