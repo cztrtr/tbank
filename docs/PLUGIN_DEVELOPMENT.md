@@ -163,7 +163,7 @@ window.__tbankReject(id, message)
 | `tbankNext` / `tbankPrevious` | 无 | `true` |
 | `tbankAiComplete` | `{prompt, images?: [dataUrl]}` | AI 返回文本；Prompt 由插件自己生成 |
 | `tbankAiExplain` | `{answer}` | 旧接口：App 生成解析 Prompt，保留兼容 |
-| `tbankAiScore` | `{answer, images: [dataUrl]}` | `0-10` 整数 |
+| `tbankAiScore` | `{answer, images: [dataUrl]}` | `0-10` 整数；App 内置评分 Prompt 并解析 |
 | `tbankReadBank` | 无 | 当前题库原始 JSON 文本 |
 | `tbankReadImage` | `{name}` | `{dataUrl}` |
 | `tbankUpdatePluginData` | `{pluginData: {...}}` | `true`，按 schema 校验后写回当前题 |
@@ -225,6 +225,37 @@ const text = await call('tbankAiComplete', {
   缩到下限仍超宽则保留横向滚动，避免公式被右侧裁掉；
 - `tbankAiExplain` 是旧接口，App 内置 Prompt，只用于兼容旧插件；
 - standard 的 `app.js` 里有完整的 `buildAiPrompt()` 示例。
+
+### AI 判分
+
+当前 standard 的主观题判分仍走 `tbankAiScore`：
+
+```text
+插件传 answer / images
+  → App 内置评分 Prompt（0-10 分）
+  → App 解析分数
+  → 返回整数给插件
+```
+
+也就是说，**判分 Prompt 和 0-10 分解析目前归 App**；插件只负责传答案、
+拿分数并决定是否 `tbankSubmit`。
+
+如果插件想完全控制判分标准，可以不用 `tbankAiScore`，改为：
+
+```js
+const text = await call('tbankAiComplete', {
+  prompt: buildScorePrompt(answer, images),
+  images: images
+});
+// 插件自己解析 text 里的分数，再调 tbankSubmit
+```
+
+`tbankAiComplete` 是独立、无状态的单次 AI 调用接口，但参数是受控的：
+
+- 固定模型 `deepseek-flash`、非流式、`thinking:false`；
+- Prompt 上限 20 KB，最多 6 张附图，超时 120 秒；
+- 不开放自定义 system / temperature / max_tokens / JSON mode；
+- App 只负责鉴权和发送，不解析业务结果。
 
 ### AI 出题
 
