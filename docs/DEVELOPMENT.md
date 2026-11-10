@@ -288,6 +288,8 @@ build/windows/x64/runner/Release/
 
 ```json
 {
+  "plugin": "standard",
+  "pluginVersion": 1,
   "questions": [
     {
       "id": "Q001",
@@ -362,13 +364,17 @@ build/windows/x64/runner/Release/
 规则：
 
 - 根节点必须是对象，题目都在 `questions` 数组里；
-- `type` 只认这四个值：`single_choice`、`multiple_choice`、`true_false`、`fill_blank`；
+- 根节点 `plugin` 表示处理这份题库的插件，省略按 `standard`；一个题库只能由一个插件处理；
+- `pluginVersion` 是插件协议版本，省略按 1；
+- standard 的 `type` 只认四个值：`single_choice`、`multiple_choice`、`true_false`、`fill_blank`；
+- 第三方插件可以使用 manifest 声明的自定义 `type`；App 会保留原始 `typeId`，由插件渲染和解释；
 - `correctAnswer` 一律是数组：单选单元素 `["B"]`、多选多元素 `["A","C"]`、填空 `["H2O"]`；
-- `correctAnswer` 里的每个值都必须能在 `options[].key` 里找到对应项（填空题 `options` 为空，不受限）；
+- standard 选择题的 `correctAnswer` 每个值必须能在 `options[].key` 里找到；自定义题型的答案结构由插件 schema 定义；
 - `analysis` 是纯文本解析，作答后显示在判分结果下方，答对答错都展示；为空则不显示解析框；
 - 填空和解释都用 `fill_blank`，`options` 为空数组；
 - `stats` 可以缺省，解析时会补 `0 / 0`；
-- 未知 `type` 会按 `fill_blank` 处理，避免一条脏数据导致整份题库打不开；
+- `pluginData` 放插件私有数据，App 原样保存；字段结构由插件 `typeSchemas` 校验；
+- 未知 `type` 会保留为 `typeId`；没有对应插件时无法正常渲染，原生回退会按 `fill_blank` 展示；
 - `image` 是**文件名**，不是路径；非空时图片必须和这道题所在的 JSON 放在同一个目录，一道题最多一张图；留空或省略表示无图；
 - `id` 建议唯一，重复不会报错但不利于排查；
 - **`id` 会被 App 替换成稳定随机 id**：添加题库目录时（以及进入错题本页兜底）扫描时，凡不是 `q_` 前缀的 id

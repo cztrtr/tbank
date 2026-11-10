@@ -245,24 +245,32 @@ flutter build windows --release
 
 ```json
 {
+  "plugin": "standard",
+  "pluginVersion": 1,
   "questions": []
 }
 ```
 
-根节点必须是 JSON 对象，所有题目放在 `questions` 数组里，**数组顺序就是出题顺序**。
+根节点必须是 JSON 对象，所有题目放在 `questions` 数组里，数组顺序就是出题顺序。
+
+- `plugin`：处理这份题库的插件 id；省略时按 `standard` 处理；
+- `pluginVersion`：插件协议版本，省略按 1；
+- 一个题库只能由一个插件处理，题目里不写 plugin；
+- 第三方插件题库必须写对应的 `plugin`，并先安装该插件。
 
 ### 题目字段
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `id` | 字符串 | 建议 | 题目标识，如 `"Q001"`。重复不会报错，但不利于排查。**启动 App 时（以及添加题库目录时）会被 App 自动替换成 `q_` 开头的稳定随机 id 并写回文件，进入错题本页时再兜底检查**，用于与文件位置无关的错题去重 |
-| `type` | 字符串 | ✅ | 只能是下方「四种题型」里的四个值之一 |
+| `type` | 字符串 | ✅ | standard 题库为 `single_choice` / `multiple_choice` / `true_false` / `fill_blank`；第三方插件题库使用 manifest 里声明的题型 id |
 | `question` | 字符串 | ✅ | 题干正文 |
 | `image` | 字符串 | | 配图文件名。没有图就写 `""` 或省略 |
 | `options` | 数组 | 选择题 ✅ | 选项列表。填空/简答题写 `[]` |
 | `correctAnswer` | 数组 | ✅ | 正确答案列表，见下方「正确答案怎么写」 |
 | `analysis` | 字符串 | | 题目解析。作答后显示在判分结果下方，没有就写 `""` 或省略 |
 | `stats` | 对象 | | 作答统计，可以省略 |
+| `pluginData` | 对象 | | 插件私有数据；standard 不需要，第三方按插件 schema 写入 |
 
 `options` 数组里每一项：
 
@@ -280,7 +288,7 @@ flutter build windows --release
 
 这两个值自己写 `0` 即可，之后由 App 维护。
 
-### 四种题型
+### standard 的四种题型
 
 | `type` | 界面表现 | `correctAnswer` 写法 |
 | --- | --- | --- |
@@ -289,12 +297,17 @@ flutter build windows --release
 | `true_false` | 选一项后提交，自动判分 | 数组，单元素，如 `["B"]` |
 | `fill_blank` | 点「展示答案」，由你自己判断对错 | 数组，如 `["H2O"]` |
 
+第三方插件可以声明自己的 `type`，例如 `coding`；具体字段含义由插件的
+`typeDescriptions` / `typeSchemas` 定义，题目私有字段放 `pluginData`。
+
 ### 完整示例
 
 这份可以直接存成 `.json` 使用，五种情况都覆盖了：
 
 ```json
 {
+  "plugin": "standard",
+  "pluginVersion": 1,
   "questions": [
     {
       "id": "Q001",
@@ -361,6 +374,29 @@ flutter build windows --release
 ```
 
 注意 `Q003` 和 `Q005` 都省略了 `stats`，`Q003` 省略了 `image`，`Q002`/`Q004`/`Q005` 省略了 `analysis`——这些字段都是可选的。
+
+第三方插件题库示例：
+
+```json
+{
+  "plugin": "coding",
+  "pluginVersion": 1,
+  "questions": [
+    {
+      "id": "Q001",
+      "type": "coding",
+      "question": "实现函数 f",
+      "options": [],
+      "correctAnswer": ["..."],
+      "stats": { "attemptCount": 0, "wrongCount": 0 },
+      "pluginData": {
+        "language": "dart",
+        "starterCode": "String f() { ... }"
+      }
+    }
+  ]
+}
+```
 
 ### 配图怎么放
 
