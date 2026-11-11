@@ -1,0 +1,69 @@
+{
+  "id": "cpp",
+  "name": "C/C++ 代码题",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "description": "面向大一程序设计课程的 C/C++ 题型：代码阅读、代码填空、上机编程。手机端只读作答，平板/PC 提供带行号的编辑器，交 AI 按入门课标准判分。",
+  "types": ["cpp_read", "cpp_fill", "cpp_ide"],
+  "typeNames": {
+    "cpp_read": "C/C++ 代码阅读",
+    "cpp_fill": "C/C++ 代码填空",
+    "cpp_ide": "C/C++ 编程题"
+  },
+  "typeDescriptions": {
+    "cpp_read": "C/C++ 代码阅读题：question 写清楚要回答什么；pluginData.code 放完整的 C/C++ 代码，pluginData.language 写 c 或 cpp。若为选择题，options 放 2~5 个选项 {key,text}，correctAnswer 放正确选项 key，如 [\"B\"]；若为开放式问答，options 为空数组，correctAnswer 放参考答案文本。analysis 写代码执行过程与易错点。",
+    "cpp_fill": "C/C++ 代码填空题：pluginData.code 放代码，每个空位用连续四个下划线 ____ 标记，空位按出现顺序对应 correctAnswer 数组，如 [\"i++\", \"a[i]\"]；options 为空数组；analysis 写每个空的判断依据。",
+    "cpp_ide": "C/C++ 上机编程题：question 写题目要求、输入输出格式与数据范围；pluginData.starterCode 放起始代码模板（可为空字符串），pluginData.tests 放 1~5 条测试点描述，如 \"输入 3 4，输出 7\"；correctAnswer 放一份可编译的参考实现；analysis 写解题思路与常见错误。"
+  },
+  "typeSchemas": {
+    "cpp_read": {
+      "type": "object",
+      "required": ["language"],
+      "properties": {
+        "language": { "type": "string", "enum": ["c", "cpp"] },
+        "code": { "type": "string", "maxLength": 12000 },
+        "hint": { "type": "string", "maxLength": 500 }
+      }
+    },
+    "cpp_fill": {
+      "type": "object",
+      "required": ["language", "code"],
+      "properties": {
+        "language": { "type": "string", "enum": ["c", "cpp"] },
+        "code": { "type": "string", "maxLength": 12000 },
+        "hint": { "type": "string", "maxLength": 500 }
+      }
+    },
+    "cpp_ide": {
+      "type": "object",
+      "required": ["language"],
+      "properties": {
+        "language": { "type": "string", "enum": ["c", "cpp"] },
+        "starterCode": { "type": "string", "maxLength": 12000 },
+        "tests": {
+          "type": "array",
+          "maxItems": 8,
+          "items": { "type": "string", "maxLength": 500 }
+        },
+        "hint": { "type": "string", "maxLength": 500 }
+      }
+    }
+  },
+  "typeExamples": {
+    "cpp_read": {
+      "language": "c",
+      "code": "#include <stdio.h>\nint main(void) {\n    int i, s = 0;\n    for (i = 1; i <= 10; i++) {\n        if (i % 2 == 0) continue;\n        s += i;\n    }\n    printf(\"%d\\n\", s);\n    return 0;\n}",
+      "hint": "注意 continue 的作用"
+    },
+    "cpp_fill": {
+      "language": "cpp",
+      "code": "#include <iostream>\nusing namespace std;\nint main() {\n    int n, sum = 0;\n    cin >> n;\n    for (int i = 1; i <= n; ____) {\n        sum ____ i;\n    }\n    cout << sum << endl;\n    return 0;\n}",
+      "hint": "累加 1 到 n"
+    },
+    "cpp_ide": {
+      "language": "cpp",
+      "starterCode": "#include <iostream>\nusing namespace std;\n\nint main() {\n    // 在这里写代码\n    return 0;\n}",
+      "tests": ["输入 3 4，输出 7", "输入 -1 1，输出 0"]
+    }
+  }
+}

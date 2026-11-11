@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>C/C++ 代码题 · 配置</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    body { padding-bottom: 24px; }
+    .app { max-width: 560px; }
+    .field { margin-bottom: 18px; }
+    .field > label {
+      display: block;
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 6px;
+    }
+    .field .desc {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 6px;
+    }
+    select, input[type="range"] {
+      width: 100%;
+    }
+    select {
+      min-height: 40px;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: var(--card);
+      color: var(--fg);
+      padding: 0 10px;
+      font-size: 14px;
+    }
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .value {
+      min-width: 44px;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      font-weight: 600;
+    }
+    .save {
+      width: 100%;
+      min-height: 44px;
+      border: 0;
+      border-radius: 12px;
+      background: var(--primary);
+      color: #fff;
+      font-size: 15px;
+      font-weight: 600;
+    }
+    .status {
+      margin-top: 10px;
+      font-size: 13px;
+      color: var(--ok);
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="card">
+      <div class="field">
+        <label for="mode">作答界面</label>
+        <select id="mode">
+          <option value="auto">自动（窗口宽度 ≥ 760px 用编辑器）</option>
+          <option value="mobile">始终手机模式（纯文本）</option>
+          <option value="ide">始终编辑器模式（带行号）</option>
+        </select>
+        <div class="desc">编程题在编辑器模式下会显示行号、Tab 缩进和自动缩进。</div>
+      </div>
+
+      <div class="field">
+        <label for="threshold">判对分数线</label>
+        <div class="row">
+          <input id="threshold" type="range" min="0" max="10" step="1" value="6">
+          <span class="value" id="threshold-value">6</span>
+        </div>
+        <div class="desc">AI 判分达到这个分数才算答对。默认 6 分。</div>
+      </div>
+
+      <div class="field">
+        <label for="fontSize">代码字号</label>
+        <div class="row">
+          <input id="fontSize" type="range" min="11" max="20" step="1" value="13">
+          <span class="value" id="fontSize-value">13</span>
+        </div>
+      </div>
+
+      <button class="save" id="save">保存</button>
+      <div class="status" id="status"></div>
+    </div>
+  </div>
+  <script src="config.js"></script>
+</body>
+</html>
