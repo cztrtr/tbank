@@ -94,7 +94,7 @@ class _MainScreenState extends State<MainScreen> {
           if (isLandscape)
             Positioned(
               left: 8,
-              bottom: _landscapeNavVisible ? 88 : 8,
+              bottom: 8,
               child: SafeArea(
                 child: FloatingActionButton.small(
                   heroTag: 'landscape-menu-toggle',
