@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../models/question_bank_file.dart';
 import 'home_page.dart';
@@ -21,29 +20,32 @@ class MainScreen extends StatefulWidget {
 class _MainScreenState extends State<MainScreen> {
   static const int _practiceTabIndex = 2; // 练习在底部导航里的位置
 
+  static const List<({IconData icon, IconData selectedIcon, String label})>
+  _destinations = <({IconData icon, IconData selectedIcon, String label})>[
+    (
+      icon: Icons.home_outlined,
+      selectedIcon: Icons.home,
+      label: '首页',
+    ),
+    (
+      icon: Icons.collections_bookmark_outlined,
+      selectedIcon: Icons.collections_bookmark,
+      label: '管理',
+    ),
+    (
+      icon: Icons.quiz_outlined,
+      selectedIcon: Icons.quiz,
+      label: '练习',
+    ),
+    (
+      icon: Icons.person_outline,
+      selectedIcon: Icons.person,
+      label: '我的',
+    ),
+  ];
+
   int _currentIndex = 0; // 当前底部导航下标
   QuestionBankFile? _selectedBank; // 当前选中的题库，null 表示还没选
-  Orientation? _lastOrientation;
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final Orientation orientation = MediaQuery.orientationOf(context);
-    if (orientation == _lastOrientation) return;
-    _lastOrientation = orientation;
-    if (orientation == Orientation.landscape) {
-      // 横屏沉浸：连同系统状态栏一起隐藏。
-      SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    } else {
-      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-    }
-  }
-
-  @override
-  void dispose() {
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-    super.dispose();
-  }
 
   /// 题库管理页点了某个题库：保存选择并切到练习页。
   void _openBank(QuestionBankFile bank) {
@@ -53,8 +55,44 @@ class _MainScreenState extends State<MainScreen> {
     });
   }
 
+  Future<void> _showLandscapeMenu() async {
+    final int? selected = await showModalBottomSheet<int>(
+      context: context,
+      showDragHandle: true,
+      builder: (BuildContext sheetContext) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              const ListTile(
+                title: Text('页面菜单'),
+                subtitle: Text('横屏时底部导航会收起，用这里切换页面。'),
+              ),
+              for (int i = 0; i < _destinations.length; i++)
+                ListTile(
+                  leading: Icon(
+                    i == _currentIndex
+                        ? _destinations[i].selectedIcon
+                        : _destinations[i].icon,
+                  ),
+                  title: Text(_destinations[i].label),
+                  selected: i == _currentIndex,
+                  onTap: () => Navigator.of(sheetContext).pop(i),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+    if (!mounted || selected == null) return;
+    setState(() => _currentIndex = selected);
+  }
+
   @override
   Widget build(BuildContext context) {
+    final bool isLandscape =
+        MediaQuery.orientationOf(context) == Orientation.landscape;
+
     // 每次重建都把最新的选中题库传给 PracticePage，
     // 这样题库页 emit 新选择后，练习页能通过 didUpdateWidget 感知。
     // 页面实例在这里重新创建，但 IndexedStack 会按位置复用各自的 State。
@@ -66,36 +104,40 @@ class _MainScreenState extends State<MainScreen> {
     ];
 
     return Scaffold(
-      body: IndexedStack(index: _currentIndex, children: pages),
+      body: Stack(
+        children: <Widget>[
+          IndexedStack(index: _currentIndex, children: pages),
+          // 横屏隐藏底部导航后，左下角留一个菜单入口，避免平板用户
+          // 找不到切换页面的地方。
+          if (isLandscape)
+            Positioned(
+              left: 12,
+              bottom: 12,
+              child: SafeArea(
+                child: FloatingActionButton.extended(
+                  heroTag: 'landscape-menu',
+                  onPressed: _showLandscapeMenu,
+                  icon: const Icon(Icons.menu),
+                  label: const Text('菜单'),
+                ),
+              ),
+            ),
+        ],
+      ),
       // 横屏时优先把高度留给练习/手写区，不显示底部导航。
-      bottomNavigationBar:
-          MediaQuery.orientationOf(context) == Orientation.landscape
+      bottomNavigationBar: isLandscape
           ? null
           : NavigationBar(
               selectedIndex: _currentIndex,
               onDestinationSelected: (index) =>
                   setState(() => _currentIndex = index),
-              destinations: const <NavigationDestination>[
-                NavigationDestination(
-                  icon: Icon(Icons.home_outlined),
-                  selectedIcon: Icon(Icons.home),
-                  label: '首页',
-                ),
-                NavigationDestination(
-                  icon: Icon(Icons.collections_bookmark_outlined),
-                  selectedIcon: Icon(Icons.collections_bookmark),
-                  label: '管理',
-                ),
-                NavigationDestination(
-                  icon: Icon(Icons.quiz_outlined),
-                  selectedIcon: Icon(Icons.quiz),
-                  label: '练习',
-                ),
-                NavigationDestination(
-                  icon: Icon(Icons.person_outline),
-                  selectedIcon: Icon(Icons.person),
-                  label: '我的',
-                ),
+              destinations: <NavigationDestination>[
+                for (final destination in _destinations)
+                  NavigationDestination(
+                    icon: Icon(destination.icon),
+                    selectedIcon: Icon(destination.selectedIcon),
+                    label: destination.label,
+                  ),
               ],
             ),
     );
