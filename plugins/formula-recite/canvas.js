@@ -408,6 +408,36 @@
     this._redraw();
   };
 
+  // 旋转屏幕/重建 DOM 时用来保留笔迹。
+  DrawBoard.prototype.exportStrokes = function () {
+    return this.strokes.map(function (stroke) {
+      return {
+        tool: stroke.tool,
+        width: stroke.width,
+        points: stroke.points.map(function (point) {
+          return { x: point.x, y: point.y, p: point.p };
+        })
+      };
+    });
+  };
+
+  DrawBoard.prototype.importStrokes = function (strokes) {
+    if (!Array.isArray(strokes)) return;
+    this.strokes = strokes.map(function (stroke) {
+      return {
+        tool: stroke.tool,
+        width: stroke.width,
+        points: (stroke.points || []).map(function (point) {
+          return { x: point.x, y: point.y, p: point.p };
+        })
+      };
+    });
+    this.current = null;
+    this.activePointerId = null;
+    this.undoStack = [];
+    this._redraw();
+  };
+
   DrawBoard.prototype.inkStats = function () {
     var width = this.canvas.width;
     var height = this.canvas.height;

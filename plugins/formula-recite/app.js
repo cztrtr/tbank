@@ -29,7 +29,11 @@
     timer: null,
     elapsed: 0,
     epoch: 0,
-    aiRaw: ""
+    aiRaw: "",
+    draftStrokes: [],
+    draftScrollLeft: 0,
+    draftScrollTop: 0,
+    draftQuestionId: ""
   };
 
   function normalizeContext(ctx) {
@@ -395,7 +399,15 @@
   }
 
   function mountBoard() {
-    if (state.board) state.board.dispose();
+    if (state.board) {
+      state.draftStrokes = state.board.exportStrokes();
+      var oldScroller = state.board.canvas.parentElement;
+      if (oldScroller) {
+        state.draftScrollLeft = oldScroller.scrollLeft;
+        state.draftScrollTop = oldScroller.scrollTop;
+      }
+      state.board.dispose();
+    }
     var canvas = state.root ? state.root.querySelector("canvas.board") : null;
     if (!canvas) return;
     if (state.model && state.model.answered) {
@@ -410,6 +422,14 @@
       eraserMode: state.eraserMode
     });
     state.board.mount();
+    if (state.draftStrokes.length > 0) {
+      state.board.importStrokes(state.draftStrokes);
+    }
+    var scroller = canvas.parentElement;
+    if (scroller) {
+      scroller.scrollLeft = state.draftScrollLeft;
+      scroller.scrollTop = state.draftScrollTop;
+    }
     bindCanvasPenGesture();
   }
 
@@ -419,15 +439,18 @@
     state.model = model;
     clear(root);
     if (root.classList) root.classList.remove("has-result");
-    root.appendChild(buildTopbar());
+
+    var leftPane = h("div", "left-pane");
+    leftPane.appendChild(buildTopbar());
     var questionPane = h("div", "question-pane");
     questionPane.appendChild(hRich("h1", "title", model.question || "（无题干）"));
     if (model.hint) questionPane.appendChild(buildHint(model.hint));
-    root.appendChild(questionPane);
+    leftPane.appendChild(questionPane);
+    leftPane.appendChild(buildToolbar());
+    leftPane.appendChild(buildActions());
+    leftPane.appendChild(buildResultHost());
+    root.appendChild(leftPane);
     root.appendChild(buildBoard());
-    root.appendChild(buildToolbar());
-    root.appendChild(buildActions());
-    root.appendChild(buildResultHost());
     mountBoard();
     startTimer();
   }
@@ -1047,10 +1070,27 @@
       state.timer.stop();
       state.timer = null;
     }
+    var nextQuestion = state.context.question && typeof state.context.question === "object"
+      ? state.context.question
+      : {};
+    var nextQuestionId = String(nextQuestion.id || "");
     if (state.board) {
+      if (state.draftQuestionId === nextQuestionId) {
+        state.draftStrokes = state.board.exportStrokes();
+        var oldScroller = state.board.canvas.parentElement;
+        if (oldScroller) {
+          state.draftScrollLeft = oldScroller.scrollLeft;
+          state.draftScrollTop = oldScroller.scrollTop;
+        }
+      } else {
+        state.draftStrokes = [];
+        state.draftScrollLeft = 0;
+        state.draftScrollTop = 0;
+      }
       state.board.dispose();
       state.board = null;
     }
+    state.draftQuestionId = nextQuestionId;
     if (state.context.theme) applyTheme(state.context.theme);
     var model = normalizeContext(state.context);
     call("tbankConfigGet", {}).then(

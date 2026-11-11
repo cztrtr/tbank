@@ -22,7 +22,7 @@ TBank 的公式默写示例插件：在画布上手写数学/物理公式，交�
 ### 导入 zip
 
 1. 打开 App →「我的」→「设置」→「插件管理」；
-2. 导入本目录下的 `formula-recite-1.1.5.zip`；
+2. 导入本目录下的 `formula-recite-1.1.6.zip`；
 3. 安装完成后，题库根节点写 `"plugin": "formula-recite"` 即可使用。
 
 zip 内 `manifest.json` 必须在根目录；本目录里的 zip 已经按这个结构打好。
@@ -135,7 +135,7 @@ formula-recite/
 ├── config.html         # 配置页
 ├── config.js           # 配置读写与默认值
 ├── README.md
-└── formula-recite-1.1.5.zip
+└── formula-recite-1.1.6.zip
 ```
 
 ## 隐私
@@ -146,6 +146,6 @@ formula-recite/
 
 ## 版本
 
-- 插件版本：`1.1.5`
+- 插件版本：`1.1.6`
 - 插件 API：`1`
 - 题库类型：`formula_recite`

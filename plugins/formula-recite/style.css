@@ -88,11 +88,16 @@ body { overscroll-behavior: none; overflow-x: hidden; }
 /* 题目/提示独立滚动：长题干、长公式不会被裁掉。 */
 .question-pane {
   min-width: 0;
-  max-height: 38vh;
-  overflow: auto;
-  overscroll-behavior: contain;
-  padding-right: 2px;
 }
+
+/* 竖屏时左栏内容直接参与整页 flex 布局，横屏时整体成为左侧滚动容器。 */
+.left-pane { display: contents; }
+.topbar { order: 0; }
+.question-pane { order: 1; }
+.board-wrap { order: 2; }
+.toolbar { order: 3; }
+.actions { order: 4; }
+.result-host { order: 5; }
 
 /* ---------- 提示 ---------- */
 .hint-row { display: flex; flex-direction: column; gap: 6px; flex: 0 0 auto; }
@@ -233,8 +238,7 @@ canvas.board.has-grid {
 /* ---------- 结果卡片 ---------- */
 .result-host {
   flex: 0 1 auto;
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  overflow: visible;
 }
 
 .result {
@@ -502,39 +506,40 @@ details.raw-ai pre {
   margin: 6px 0 0;
 }
 
-/* ---------- 横屏：左侧题目/判分，右侧手写板 ---------- */
+/* ---------- 横屏：整块左栏一起滚动，右侧手写板固定 ---------- */
 @media (orientation: landscape) {
   html, body { height: 100%; overflow: hidden; }
 
   .app {
     display: grid;
     grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
-    grid-template-rows: auto auto auto auto minmax(0, 1fr);
-    grid-template-areas:
-      "top top"
-      "question board"
-      "toolbar board"
-      "actions board"
-      "result board";
+    grid-template-rows: minmax(0, 1fr);
+    grid-template-areas: "left board";
     height: 100%;
     overflow: hidden;
     padding: 10px 14px;
-    gap: 8px 14px;
+    gap: 14px;
   }
 
-  .topbar { grid-area: top; }
-  .question-pane {
-    grid-area: question;
-    max-height: 40vh;
+  .left-pane {
+    grid-area: left;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
     min-height: 0;
-    overflow: auto;
+    overflow-y: auto;
+    overflow-x: auto;
+    overscroll-behavior: contain;
+    padding-right: 2px;
+  }
+
+  .topbar, .question-pane, .toolbar, .actions, .result-host {
+    flex: 0 0 auto;
   }
   .title { font-size: clamp(16px, 1.5vw + 6px, 23px); }
-  .hint-row { grid-area: auto; }
   .board-wrap { grid-area: board; height: 100%; min-height: 0; }
-  .toolbar { grid-area: toolbar; align-content: start; }
-  .actions { grid-area: actions; }
-  .result-host { grid-area: result; min-height: 0; overflow-y: auto; }
+  .result-host { overflow: visible; }
+  .toolbar { align-content: start; }
 
   .app.has-result .board-wrap {
     flex: none;

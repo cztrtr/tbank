@@ -17,6 +17,7 @@
   var scratchOpen = false;
   var scratchBoard = null;
   var scratchTool = 'pen';
+  var scratchStrokes = [];
 
   function esc(value) {
     return String(value == null ? '' : value)
@@ -117,6 +118,7 @@
       aiError = '';
       showAnswer = false;
       scratchOpen = false;
+      scratchStrokes = [];
       if (scratchBoard) {
         scratchBoard.dispose();
         scratchBoard = null;
@@ -264,14 +266,14 @@
       }
     }
 
-    html += '</div>'; // practice-main
-
     // 最下方的手写区入口：所有题型都可以当草稿用；
     // 填空/证明题可以把画布直接加入作答图片。
     var scratchTitle = isFill ? '手写作答' : '手写草稿';
     html += '<div class="scratch-toggle-row">' +
       '<button class="outline" data-action="scratch-toggle">' +
       (scratchOpen ? '收起手写区' : '展开手写区') + '</button></div>';
+    html += '</div>'; // practice-main
+
     if (scratchOpen) {
       html += '<div class="scratch-wrap" id="scratch-wrap">' +
         '<div class="scratch-head"><span>' + scratchTitle + '</span>' +
@@ -297,6 +299,7 @@
 
   function mountScratch() {
     if (scratchBoard) {
+      scratchStrokes = scratchBoard.exportStrokes();
       scratchBoard.dispose();
       scratchBoard = null;
     }
@@ -315,6 +318,9 @@
       tool: scratchTool === 'eraser' ? 'eraser' : 'pen'
     });
     scratchBoard.mount();
+    if (scratchStrokes.length > 0) {
+      scratchBoard.importStrokes(scratchStrokes);
+    }
   }
 
   function renderMath(attempt) {
@@ -426,6 +432,7 @@
         } else if (action === 'scratch-toggle') {
           scratchOpen = !scratchOpen;
           if (!scratchOpen && scratchBoard) {
+            scratchStrokes = scratchBoard.exportStrokes();
             scratchBoard.dispose();
             scratchBoard = null;
           }
@@ -440,6 +447,7 @@
           if (scratchBoard) scratchBoard.undo();
         } else if (action === 'scratch-clear') {
           if (scratchBoard) scratchBoard.clear();
+          scratchStrokes = [];
         } else if (action === 'scratch-add') {
           addScratchToAnswer();
         }
@@ -483,6 +491,7 @@
     }
     answerImages.push(scratchBoard.toPngDataUrl({ maxEdge: 1600, crop: true }));
     scratchOpen = false;
+    scratchStrokes = [];
     aiError = '';
     render();
   }

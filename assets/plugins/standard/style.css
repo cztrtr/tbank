@@ -354,6 +354,7 @@ canvas.scratch-board.has-grid {
   .app.has-scratch {
     display: grid;
     grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+    grid-template-rows: minmax(0, 1fr);
     grid-template-areas: "main scratch";
     gap: 12px;
     height: 100%;
@@ -375,8 +376,8 @@ canvas.scratch-board.has-grid {
   }
 
   .scratch-board-wrap {
-    flex: 1;
+    flex: 1 1 0;
     min-height: 0;
-    height: auto;
+    height: 0;
   }
 }
