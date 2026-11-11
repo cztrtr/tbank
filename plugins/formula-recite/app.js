@@ -650,6 +650,19 @@
     }
   }
 
+  function renderFormulaValue(value) {
+    var text = String(value === undefined || value === null ? "" : value).trim();
+    if (!text) return "（没有识别出内容）";
+    if (text.indexOf("$") >= 0 || text.indexOf("\\(") >= 0 || text.indexOf("\\[") >= 0) {
+      return renderAiMarkdown(text);
+    }
+    var cleaned = text.replace(/^\$\$?/, "").replace(/\$\$?$/, "").trim();
+    if (typeof renderTex === "function") {
+      return '<span class="tex-inline">' + renderTex(cleaned) + "</span>";
+    }
+    return escapeAiHtml(cleaned);
+  }
+
   function renderResult(mode, forcedCorrect) {
     var host = state.resultHost;
     if (!host) return;
@@ -690,9 +703,11 @@
     panel.appendChild(head);
 
     if (verdict && (mode === "confirm" || mode === "submitted")) {
-      var recognized = h("div", "result-row");
+      var recognized = h("div", "result-row result-recognized");
       recognized.appendChild(h("span", "result-label", "AI 读到的手写内容"));
-      recognized.appendChild(document.createTextNode(verdict.recognized || "（没有识别出内容）"));
+      var recognizedValue = h("div", "recognized-value");
+      recognizedValue.innerHTML = renderFormulaValue(verdict.recognized);
+      recognized.appendChild(recognizedValue);
       panel.appendChild(recognized);
       if (verdict.reason) panel.appendChild(h("div", "note", verdict.reason));
     }
@@ -723,8 +738,8 @@
       no.addEventListener("click", function () {
         confirmVerdict(false);
       });
-      buttons.appendChild(yes);
       buttons.appendChild(no);
+      buttons.appendChild(yes);
       panel.appendChild(buttons);
     }
     card.appendChild(panel);
@@ -863,7 +878,7 @@
       "参考答案（以下任一写法都算正确）：" + answers.join(" | "),
       "",
       "请完成：",
-      "1. 逐行识别图片中的手写字迹，按你看到的内容转写（不要纠正成你认为正确的公式）；",
+      "1. recognized 写识别出的公式 LaTeX 源码（不要加 $ 或代码围栏），逐行按你看到的内容转写（不要纠正成你认为正确的公式）；",
       "2. 判断手写内容与参考答案是否数学等价。只看数学内容：变量顺序、括号冗余、空格、下标写法差异都不算错；系数、指数、正负号、运算符、积分上下限写错算错；",
       "3. 给出 0-10 的整数分：完全等价 10；等价但写法明显不同 8-9；主干正确但有缺项或小错 4-6；偏离题意或大面积错误 0-3；",
       "4. reason 用中文，不超过 60 字，指出关键差异（没有差异就写“与参考答案一致”）。",

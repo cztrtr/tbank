@@ -314,6 +314,14 @@ canvas.board.has-grid {
 
 .result-row b { font-weight: 600; }
 
+.result-recognized .recognized-value {
+  font-size: 15px;
+  line-height: 1.7;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 0;
+}
+
 .answer-line { font-size: 16px; }
 
 .answer-alt { font-size: 13px; color: var(--muted); margin-top: 4px; }

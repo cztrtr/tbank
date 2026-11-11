@@ -1,7 +1,7 @@
 name: tbank
 description: "本地题库刷题 App：扫描 JSON 题库、逐题作答、记录并回写每题统计。"
 publish_to: 'none'
-version: 0.4.5+49
+version: 0.4.6+50
 
 environment:
   sdk: ^3.13.5
@@ -45,6 +45,10 @@ flutter:
     - assets/plugins/standard/katex/contrib/
     - assets/plugins/standard/katex/fonts/
     - assets/plugins/standard/fonts/ # 阿里巴巴普惠体
+    - assets/plugins/formula-recite/ # 内置公式默写插件
+    - assets/plugins/formula-recite/katex/ # 公式默写离线公式渲染
+    - assets/plugins/formula-recite/katex/contrib/
+    - assets/plugins/formula-recite/katex/fonts/
 
 # 启动图标：由一张 1024x1024 的 PNG 生成各平台尺寸
 flutter_launcher_icons:

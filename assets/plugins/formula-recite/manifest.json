@@ -1,0 +1,50 @@
+{
+  "id": "formula-recite",
+  "name": "公式默写",
+  "version": "1.1.7",
+  "apiVersion": 1,
+  "description": "手写默写数学/物理公式，AI 判分 + 自评兜底，支持计时",
+  "types": [
+    "formula_recite"
+  ],
+  "typeNames": {
+    "formula_recite": "公式默写"
+  },
+  "typeDescriptions": {
+    "formula_recite": "公式默写题：question 写公式的名称或提示语（如“牛顿第二定律”），options 为空数组；correctAnswer 放纯文本等价写法，可给多个（任一算对），如 [\"F = ma\", \"ΣF = ma\"]；analysis 写推导思路与易错点；pluginData 放 {\"subject\":\"math 或 physics\",\"chapter\":\"章节名\",\"latex\":\"标准答案的 LaTeX\",\"hint\":\"一句话提示\"}。"
+  },
+  "typeSchemas": {
+    "formula_recite": {
+      "type": "object",
+      "required": [
+        "subject"
+      ],
+      "properties": {
+        "subject": {
+          "type": "string",
+          "enum": [
+            "math",
+            "physics"
+          ]
+        },
+        "chapter": {
+          "type": "string"
+        },
+        "latex": {
+          "type": "string"
+        },
+        "hint": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "typeExamples": {
+    "formula_recite": {
+      "subject": "physics",
+      "chapter": "动力学",
+      "latex": "\\sum \\vec{F} = m\\vec{a}",
+      "hint": "合外力、质量、加速度"
+    }
+  }
+}

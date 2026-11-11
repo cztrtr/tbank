@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../models/question_bank_file.dart';
 import 'home_page.dart';
@@ -47,6 +48,30 @@ class _MainScreenState extends State<MainScreen> {
   int _currentIndex = 0; // 当前底部导航下标
   QuestionBankFile? _selectedBank; // 当前选中的题库，null 表示还没选
   bool _landscapeNavVisible = false; // 横屏底部导航是否临时展开
+  Orientation? _lastOrientation;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final Orientation orientation = MediaQuery.orientationOf(context);
+    if (orientation == _lastOrientation) return;
+    _lastOrientation = orientation;
+    if (orientation == Orientation.landscape) {
+      // 横屏只隐藏顶部状态栏，保留系统底部导航栏。
+      SystemChrome.setEnabledSystemUIMode(
+        SystemUiMode.manual,
+        overlays: <SystemUiOverlay>[SystemUiOverlay.bottom],
+      );
+    } else {
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    }
+  }
+
+  @override
+  void dispose() {
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    super.dispose();
+  }
 
   /// 题库管理页点了某个题库：保存选择并切到练习页。
   void _openBank(QuestionBankFile bank) {

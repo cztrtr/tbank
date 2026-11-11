@@ -211,6 +211,14 @@ class PluginManager {
   PluginManager._();
 
   static const String builtinId = 'standard';
+
+  /// 随 APK 发布的内置插件；它们会自动同步到插件目录，但不可卸载。
+  static const List<String> builtinIds = <String>[
+    builtinId,
+    'formula-recite',
+  ];
+
+  static bool isBuiltin(String id) => builtinIds.contains(id);
   static const String manifestName = 'manifest.json';
   static const String configPageName = 'config.html';
   static const String configFileName = 'config.json';
@@ -251,68 +259,82 @@ class PluginManager {
     return dir;
   }
 
-  /// 把随包发布的内置插件资源同步到插件目录。
+  /// 把随包发布的全部内置插件资源同步到插件目录。
   ///
-  /// 用 AssetManifest 列出 `assets/plugins/standard/` 下所有文件（含 KaTeX
-  /// 字体），按二进制原样写入；standard 和第三方插件走同一套 WebView 协议。
+  /// 用 AssetManifest 列出 `assets/plugins/<id>/` 下所有文件（含 KaTeX
+  /// 字体），按二进制原样写入；内置插件和第三方插件走同一套 WebView 协议。
   static Future<void> ensureBuiltin() async {
     final Directory dir = await directory();
+    final AssetManifest manifest;
+    try {
+      manifest = await AssetManifest.loadFromAssetBundle(rootBundle);
+    } catch (error) {
+      debugPrint('读取内置插件资源清单失败：$error');
+      return;
+    }
+    for (final String id in builtinIds) {
+      try {
+        await _ensureBuiltin(id, dir, manifest);
+      } catch (error) {
+        debugPrint('同步内置插件 $id 失败：$error');
+      }
+    }
+  }
+
+  static Future<void> _ensureBuiltin(
+    String id,
+    Directory dir,
+    AssetManifest manifest,
+  ) async {
     final Directory target = Directory(
-      '${dir.path}${Platform.pathSeparator}$builtinId',
+      '${dir.path}${Platform.pathSeparator}$id',
     );
     await target.create(recursive: true);
 
-    const String prefix = 'assets/plugins/$builtinId/';
-    try {
-      final String assetManifestText = await rootBundle.loadString(
-        'assets/plugins/$builtinId/manifest.json',
-      );
-      final dynamic decodedAsset = jsonDecode(assetManifestText);
-      final PluginManifest assetManifest = PluginManifest.fromJson(
-        Map<String, dynamic>.from(decodedAsset as Map),
-        builtin: true,
-      );
+    final String prefix = 'assets/plugins/$id/';
+    final String assetManifestText = await rootBundle.loadString(
+      'assets/plugins/$id/manifest.json',
+    );
+    final dynamic decodedAsset = jsonDecode(assetManifestText);
+    final PluginManifest assetManifest = PluginManifest.fromJson(
+      Map<String, dynamic>.from(decodedAsset as Map),
+      builtin: true,
+    );
 
-      // 用户安装过更高版本的 standard 插件时，不被随包旧资源覆盖。
-      final File installedManifestFile = File(
-        '${target.path}${Platform.pathSeparator}$manifestName',
-      );
-      if (await installedManifestFile.exists()) {
-        try {
-          final dynamic decoded = jsonDecode(
-            await installedManifestFile.readAsString(),
-          );
-          final PluginManifest installed = PluginManifest.fromJson(
-            Map<String, dynamic>.from(decoded as Map),
-            builtin: true,
-          );
-          if (compareVersions(installed.version, assetManifest.version) > 0) {
-            return;
-          }
-        } catch (error) {
-          debugPrint('读取已安装 standard 版本失败，回退内置资源：$error');
+    // 用户安装过更高版本的内置插件时，不被随包旧资源覆盖。
+    final File installedManifestFile = File(
+      '${target.path}${Platform.pathSeparator}$manifestName',
+    );
+    if (await installedManifestFile.exists()) {
+      try {
+        final dynamic decoded = jsonDecode(
+          await installedManifestFile.readAsString(),
+        );
+        final PluginManifest installed = PluginManifest.fromJson(
+          Map<String, dynamic>.from(decoded as Map),
+          builtin: true,
+        );
+        if (compareVersions(installed.version, assetManifest.version) > 0) {
+          return;
         }
+      } catch (error) {
+        debugPrint('读取已安装 $id 版本失败，回退内置资源：$error');
       }
+    }
 
-      final AssetManifest manifest = await AssetManifest.loadFromAssetBundle(
-        rootBundle,
+    for (final String asset in manifest.listAssets()) {
+      if (!asset.startsWith(prefix)) continue;
+      final data = await rootBundle.load(asset);
+      final String relative = asset.substring(prefix.length);
+      final File file = File(
+        '${target.path}${Platform.pathSeparator}'
+        '${relative.replaceAll('/', Platform.pathSeparator)}',
       );
-      for (final String asset in manifest.listAssets()) {
-        if (!asset.startsWith(prefix)) continue;
-        final data = await rootBundle.load(asset);
-        final String relative = asset.substring(prefix.length);
-        final File file = File(
-          '${target.path}${Platform.pathSeparator}'
-          '${relative.replaceAll('/', Platform.pathSeparator)}',
-        );
-        await file.parent.create(recursive: true);
-        await file.writeAsBytes(
-          data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
-          flush: true,
-        );
-      }
-    } catch (error) {
-      debugPrint('同步内置插件资源失败：$error');
+      await file.parent.create(recursive: true);
+      await file.writeAsBytes(
+        data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
+        flush: true,
+      );
     }
   }
 
@@ -401,7 +423,7 @@ class PluginManager {
           final dynamic decoded = jsonDecode(await manifest.readAsString());
           if (decoded is! Map) continue;
           final String folder = _baseName(entity.path);
-          final bool builtin = folder == builtinId;
+          final bool builtin = isBuiltin(folder);
           plugins.add(
             PluginManifest.fromJson(
               Map<String, dynamic>.from(decoded),
@@ -496,7 +518,7 @@ class PluginManager {
       final Directory target = Directory(
         '${root.path}${Platform.pathSeparator}${manifest.id}',
       );
-      if (manifest.id == builtinId) {
+      if (isBuiltin(manifest.id)) {
         // 内置插件仍不可卸载，但允许安装更高版本实现热更新。
         final File installedManifest = File(
           '${target.path}${Platform.pathSeparator}$manifestName',
@@ -511,7 +533,9 @@ class PluginManager {
               builtin: true,
             );
             if (compareVersions(manifest.version, installed.version) <= 0) {
-              throw PluginException('standard 插件版本必须高于当前 ${installed.version}');
+              throw PluginException(
+                '${manifest.id} 插件版本必须高于当前 ${installed.version}',
+              );
             }
           } catch (error) {
             if (error is PluginException) rethrow;
@@ -584,7 +608,7 @@ class PluginManager {
 
   /// 卸载插件；内置插件不可卸载。
   static Future<void> uninstall(String id) async {
-    if (id == builtinId) {
+    if (isBuiltin(id)) {
       throw const PluginException('内置插件不可卸载');
     }
     final Directory dir = await directory();

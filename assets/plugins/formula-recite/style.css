@@ -1,0 +1,595 @@
+:root {
+  --bg: #f7f7f9;
+  --surface: #ffffff;
+  --text: #1c1b1f;
+  --muted: #6b6b74;
+  --line: #e0e0e6;
+  --primary: #2f6fed;
+  --primary-soft: #e5edff;
+  --ok: #1e8e3e;
+  --ok-soft: #e6f4ea;
+  --bad: #c5221f;
+  --bad-soft: #fce8e6;
+  --pad: clamp(10px, 1.6vh, 18px);
+  --gap: clamp(8px, 1.2vh, 14px);
+  --touch: 44px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  -webkit-text-size-adjust: 100%;
+  overscroll-behavior: none;
+}
+
+body { overscroll-behavior: none; overflow-x: hidden; }
+
+/* 整页铺满：题干在上，画布吃掉剩余高度，工具栏和主按钮固定在下方。 */
+.app {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+  color: var(--text);
+  padding: var(--pad) var(--pad) calc(var(--pad) + env(safe-area-inset-bottom));
+  padding-left: calc(var(--pad) + env(safe-area-inset-left));
+  padding-right: calc(var(--pad) + env(safe-area-inset-right));
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+}
+
+.loading { color: var(--muted); text-align: center; padding: 40px 0; }
+
+/* ---------- 顶部 ---------- */
+.topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.chip {
+  font-size: 12px;
+  line-height: 22px;
+  padding: 1px 10px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.chip-badge {
+  background: var(--primary-soft);
+  border-color: transparent;
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.chip-stats { margin-left: auto; }
+
+.title {
+  margin: 0;
+  font-size: clamp(18px, 2.4vw + 6px, 26px);
+  line-height: 1.5;
+  font-weight: 700;
+  word-break: break-word;
+  flex: 0 0 auto;
+}
+
+/* 题目/提示独立滚动：长题干、长公式不会被裁掉。 */
+.question-pane {
+  min-width: 0;
+}
+
+/* 竖屏时左栏内容直接参与整页 flex 布局，横屏时整体成为左侧滚动容器。 */
+.left-pane { display: contents; }
+.topbar { order: 0; }
+.question-pane { order: 1; }
+.board-wrap { order: 2; }
+.toolbar { order: 3; }
+.actions { order: 4; }
+.result-host { order: 5; }
+
+/* ---------- 提示 ---------- */
+.hint-row { display: flex; flex-direction: column; gap: 6px; flex: 0 0 auto; }
+
+.hint-toggle {
+  align-self: flex-start;
+  border: 1px dashed var(--line);
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  min-height: 36px;
+  padding: 4px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.hint-text {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 12px;
+}
+
+/* ---------- 画布 ---------- */
+.board-wrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: clamp(170px, 34vh, 560px);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #ffffff;
+  overflow: scroll;
+  overscroll-behavior: contain;
+  scrollbar-width: auto;
+  scrollbar-color: var(--line) transparent;
+}
+
+/* 让下方/右侧滚动条一直有可见的拖动条，画布可以写到视口外。 */
+.board-wrap::-webkit-scrollbar { width: 17px; height: 17px; }
+.board-wrap::-webkit-scrollbar-track { background: transparent; }
+.board-wrap::-webkit-scrollbar-thumb {
+  background: #c7c7cf;
+  border-radius: 999px;
+  border: 2px solid #ffffff;
+}
+.board-wrap::-webkit-scrollbar-corner { background: transparent; }
+
+canvas.board {
+  display: block;
+  /* 画布是视口的 2 倍，滚动条负责平移；坐标仍按 canvas 实际矩形计算。 */
+  width: 200%;
+  height: 200%;
+  min-height: 0;
+  border-radius: 0;
+  border: 0;
+  /* 画布就是"纸"：永远白底，不跟系统主题走，否则暗色主题下深色笔迹会消失 */
+  background-color: #ffffff;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+  cursor: crosshair;
+}
+
+canvas.board.is-eraser { cursor: cell; }
+
+canvas.board.has-grid {
+  background-image:
+    linear-gradient(to right, rgba(0, 0, 0, 0.06) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(0, 0, 0, 0.06) 1px, transparent 1px);
+  background-size: 26px 26px;
+  background-position: center center;
+}
+
+/* ---------- 工具栏 ---------- */
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.tool-group {
+  display: flex;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.tool {
+  flex: 1 1 0;
+  min-width: 54px;
+  min-height: var(--touch);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 15px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.tool-mode { font-weight: 600; }
+
+.tool.active {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: var(--primary-soft);
+}
+
+/* ---------- 主按钮 ---------- */
+.actions { display: flex; gap: 10px; flex: 0 0 auto; }
+
+.primary {
+  flex: 1;
+  border: none;
+  border-radius: 12px;
+  background: var(--primary);
+  color: #fff;
+  font-size: 17px;
+  font-weight: 600;
+  min-height: 52px;
+  padding: 12px 16px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.primary[disabled] {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* ---------- 结果卡片 ---------- */
+.result-host {
+  flex: 0 1 auto;
+  overflow: visible;
+}
+
+.result {
+  border: 0;
+  background: transparent;
+  border-radius: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* 判分区单独一块，对错只影响这一块的背景。 */
+.result-verdict {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: 14px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.result-verdict.is-correct { border-color: var(--ok); background: var(--ok-soft); }
+.result-verdict.is-wrong { border-color: var(--bad); background: var(--bad-soft); }
+
+.result.is-grading {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: 14px;
+  padding: 14px;
+}
+
+/* 解析区始终白底，不跟判分区的红/绿背景走。 */
+.result-detail {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: 14px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.result-detail .explain {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.result-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.result-score {
+  margin-left: auto;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.result-row { font-size: 14px; line-height: 1.7; }
+
+.result-label {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+
+.result-row b { font-weight: 600; }
+
+.result-recognized .recognized-value {
+  font-size: 15px;
+  line-height: 1.7;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 0;
+}
+
+.answer-line { font-size: 16px; }
+
+.answer-alt { font-size: 13px; color: var(--muted); margin-top: 4px; }
+
+.verdict-buttons { display: flex; gap: 10px; }
+
+.verdict {
+  flex: 1;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  min-height: var(--touch);
+  padding: 10px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.verdict.suggest-correct { border-color: var(--ok); color: var(--ok); }
+.verdict.suggest-wrong { border-color: var(--bad); color: var(--bad); }
+.verdict[disabled] { opacity: 0.5; cursor: default; }
+
+.result-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.ghost {
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--text);
+  font-size: 14px;
+  min-height: 40px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.explain {
+  font-size: 14px;
+  line-height: 1.8;
+  color: var(--text);
+  border-top: 1px dashed var(--line);
+  padding-top: 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* AI 解析是 Markdown + LaTeX，用块级排版而不是 pre-wrap 纯文本。 */
+.explain.ai-rich { white-space: normal; }
+.ai-rich p { margin: 0 0 8px; }
+.ai-rich p:last-child { margin-bottom: 0; }
+.ai-rich h1, .ai-rich h2, .ai-rich h3,
+.ai-rich h4, .ai-rich h5, .ai-rich h6 {
+  margin: 12px 0 6px;
+  line-height: 1.45;
+  font-size: 15px;
+}
+.ai-rich h1, .ai-rich h2 { font-size: 17px; }
+.ai-rich ul, .ai-rich ol {
+  margin: 4px 0 8px;
+  padding-left: 22px;
+}
+.ai-rich li { margin: 2px 0; }
+.ai-rich blockquote {
+  margin: 6px 0 8px;
+  padding-left: 10px;
+  border-left: 3px solid var(--line);
+  color: var(--muted);
+}
+.ai-rich hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 10px 0;
+}
+.ai-rich code {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.92em;
+  background: var(--bg);
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+.ai-rich pre {
+  margin: 6px 0 10px;
+  padding: 10px;
+  overflow-x: auto;
+  background: var(--bg);
+  border-radius: 8px;
+}
+.ai-rich pre code { padding: 0; background: transparent; }
+
+.note {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.error-box {
+  font-size: 13px;
+  color: var(--bad);
+  background: var(--bad-soft);
+  border-radius: 10px;
+  padding: 8px 10px;
+  word-break: break-word;
+}
+
+/* ---------- 轻量公式排版 ---------- */
+.tex, .tex-inline, .tex-display {
+  font-family: "Cambria Math", "STIX Two Math", "Latin Modern Math", "Times New Roman", serif;
+}
+
+.tex { line-height: 1.9; word-break: break-word; }
+
+.tex-inline { display: inline; white-space: normal; padding: 0 1px; }
+
+.tex-display {
+  display: block;
+  text-align: center;
+  margin: 6px 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.frac {
+  display: inline-flex;
+  flex-direction: column;
+  vertical-align: middle;
+  text-align: center;
+  margin: 0 3px;
+  font-size: 0.95em;
+}
+
+.frac .num { border-bottom: 1px solid currentColor; padding: 0 4px; }
+.frac .den { padding: 0 4px; }
+
+.sqrt { display: inline-flex; align-items: flex-start; }
+.sqrt .radic { margin-right: 1px; }
+.sqrt .inner { border-top: 1px solid currentColor; padding: 0 3px; }
+
+.accent { position: relative; display: inline-block; }
+.accent-mark { position: absolute; top: -0.85em; left: 0; font-size: 0.75em; }
+
+.tex-text { font-family: inherit; }
+.tex-mathbf { font-weight: 700; }
+.tex-overline { border-top: 1px solid currentColor; padding-top: 1px; }
+.tex-underline { border-bottom: 1px solid currentColor; padding-bottom: 1px; }
+.tex-boxed {
+  display: inline-block;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  padding: 1px 4px;
+}
+
+sup, sub { font-size: 0.72em; }
+
+/* ---------- 计时 ---------- */
+.timer {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.timer.warn { color: var(--bad); font-weight: 600; }
+/* 浏览器默认样式会让 inline-flex 覆盖 hidden，这里强制生效 */
+[hidden] { display: none !important; }
+
+canvas.board.is-locked { pointer-events: none; opacity: 0.85; }
+
+/* 出结果后画布让位给结果卡片，避免用户还要往下滚 */
+.app.has-result .board-wrap {
+  flex: 0 0 auto;
+  height: clamp(96px, 18vh, 170px);
+  min-height: 96px;
+}
+
+.app.has-result .title { font-size: clamp(16px, 1.6vw + 5px, 22px); }
+
+.timer.paused { color: var(--bad); }
+
+details.raw-ai { font-size: 12px; color: var(--muted); }
+details.raw-ai summary { cursor: pointer; }
+details.raw-ai pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--bg);
+  border-radius: 8px;
+  padding: 8px;
+  margin: 6px 0 0;
+}
+
+/* ---------- 横屏：整块左栏一起滚动，右侧手写板固定 ---------- */
+@media (orientation: landscape) {
+  html, body { height: 100%; overflow: hidden; }
+
+  .app {
+    display: grid;
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+    grid-template-rows: minmax(0, 1fr);
+    grid-template-areas: "left board";
+    height: 100%;
+    overflow: hidden;
+    padding: 10px 14px;
+    gap: 14px;
+  }
+
+  .left-pane {
+    grid-area: left;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: auto;
+    overscroll-behavior: contain;
+    padding-right: 2px;
+  }
+
+  .topbar, .question-pane, .toolbar, .actions, .result-host {
+    flex: 0 0 auto;
+  }
+  .title { font-size: clamp(16px, 1.5vw + 6px, 23px); }
+  .board-wrap { grid-area: board; height: 100%; min-height: 0; }
+  .result-host { overflow: visible; }
+  .toolbar { align-content: start; }
+
+  .app.has-result .board-wrap {
+    flex: none;
+    height: 100%;
+    min-height: 0;
+  }
+}
+
+/* ---------- 横屏矮屏 / 平板 ---------- */
+@media (max-height: 520px) {
+  .chip { font-size: 11px; }
+  .title { font-size: clamp(16px, 2.2vw + 4px, 20px); }
+  .board-wrap { min-height: 140px; }
+  .primary { min-height: 46px; font-size: 16px; }
+  .tool { min-height: 40px; font-size: 14px; }
+}
+/* ---------- 笔 / 橡皮 / 粗细滑块 ---------- */
+.tool-pen { align-items: center; }
+
+.tool-mode.is-eraser {
+  border-color: var(--bad);
+  color: var(--bad);
+  background: var(--bad-soft);
+}
+
+.width-range {
+  width: 92px;
+  accent-color: var(--primary);
+}
+
+.width-value {
+  font-size: 12px;
+  color: var(--muted);
+  min-width: 34px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.eraser-modes .tool.active {
+  border-color: var(--bad);
+  color: var(--bad);
+  background: var(--bad-soft);
+}
+
+canvas.board.is-eraser { cursor: cell; }
