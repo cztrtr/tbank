@@ -12,7 +12,7 @@
 
 ## 安装
 
-1. 把本目录打成 zip（`manifest.json` 在 zip 根目录）
+1. 直接使用本目录下的 `cpp-1.0.0.zip`（`manifest.json` 在 zip 根目录）
 2. tbank → 设置 → 插件管理 → 导入本地 zip
 3. 新建题库时选择题型「C/C++ 编程题」，或按下方格式手写题库
 
