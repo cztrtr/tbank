@@ -46,6 +46,7 @@ class _MainScreenState extends State<MainScreen> {
 
   int _currentIndex = 0; // 当前底部导航下标
   QuestionBankFile? _selectedBank; // 当前选中的题库，null 表示还没选
+  bool _landscapeNavVisible = false; // 横屏底部导航是否临时展开
 
   /// 题库管理页点了某个题库：保存选择并切到练习页。
   void _openBank(QuestionBankFile bank) {
@@ -53,39 +54,6 @@ class _MainScreenState extends State<MainScreen> {
       _selectedBank = bank;
       _currentIndex = _practiceTabIndex;
     });
-  }
-
-  Future<void> _showLandscapeMenu() async {
-    final int? selected = await showModalBottomSheet<int>(
-      context: context,
-      showDragHandle: true,
-      builder: (BuildContext sheetContext) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              const ListTile(
-                title: Text('页面菜单'),
-                subtitle: Text('横屏时底部导航会收起，用这里切换页面。'),
-              ),
-              for (int i = 0; i < _destinations.length; i++)
-                ListTile(
-                  leading: Icon(
-                    i == _currentIndex
-                        ? _destinations[i].selectedIcon
-                        : _destinations[i].icon,
-                  ),
-                  title: Text(_destinations[i].label),
-                  selected: i == _currentIndex,
-                  onTap: () => Navigator.of(sheetContext).pop(i),
-                ),
-            ],
-          ),
-        );
-      },
-    );
-    if (!mounted || selected == null) return;
-    setState(() => _currentIndex = selected);
   }
 
   @override
@@ -103,43 +71,51 @@ class _MainScreenState extends State<MainScreen> {
       const MePage(),
     ];
 
+    final NavigationBar navigationBar = NavigationBar(
+      selectedIndex: _currentIndex,
+      onDestinationSelected: (index) =>
+          setState(() => _currentIndex = index),
+      destinations: <NavigationDestination>[
+        for (final destination in _destinations)
+          NavigationDestination(
+            icon: Icon(destination.icon),
+            selectedIcon: Icon(destination.selectedIcon),
+            label: destination.label,
+          ),
+      ],
+    );
+
     return Scaffold(
       body: Stack(
         children: <Widget>[
           IndexedStack(index: _currentIndex, children: pages),
-          // 横屏隐藏底部导航后，左下角留一个菜单入口，避免平板用户
-          // 找不到切换页面的地方。
+          // 横屏默认收起底部导航；左下角小图标只负责把原导航
+          // 呼出/收回，不再另造一层菜单。
           if (isLandscape)
             Positioned(
-              left: 12,
-              bottom: 12,
+              left: 8,
+              bottom: _landscapeNavVisible ? 88 : 8,
               child: SafeArea(
-                child: FloatingActionButton.extended(
-                  heroTag: 'landscape-menu',
-                  onPressed: _showLandscapeMenu,
-                  icon: const Icon(Icons.menu),
-                  label: const Text('菜单'),
+                child: FloatingActionButton.small(
+                  heroTag: 'landscape-menu-toggle',
+                  tooltip: _landscapeNavVisible ? '隐藏底部导航' : '显示底部导航',
+                  onPressed: () => setState(
+                    () => _landscapeNavVisible = !_landscapeNavVisible,
+                  ),
+                  child: Icon(
+                    _landscapeNavVisible
+                        ? Icons.keyboard_arrow_down
+                        : Icons.menu,
+                  ),
                 ),
               ),
             ),
         ],
       ),
-      // 横屏时优先把高度留给练习/手写区，不显示底部导航。
+      // 横屏默认隐藏底部导航，点左下角图标后恢复原来的 NavigationBar。
       bottomNavigationBar: isLandscape
-          ? null
-          : NavigationBar(
-              selectedIndex: _currentIndex,
-              onDestinationSelected: (index) =>
-                  setState(() => _currentIndex = index),
-              destinations: <NavigationDestination>[
-                for (final destination in _destinations)
-                  NavigationDestination(
-                    icon: Icon(destination.icon),
-                    selectedIcon: Icon(destination.selectedIcon),
-                    label: destination.label,
-                  ),
-              ],
-            ),
+          ? (_landscapeNavVisible ? navigationBar : null)
+          : navigationBar,
     );
   }
 }
