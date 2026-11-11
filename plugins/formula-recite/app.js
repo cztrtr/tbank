@@ -420,8 +420,10 @@
     clear(root);
     if (root.classList) root.classList.remove("has-result");
     root.appendChild(buildTopbar());
-    root.appendChild(hRich("h1", "title", model.question || "（无题干）"));
-    if (model.hint) root.appendChild(buildHint(model.hint));
+    var questionPane = h("div", "question-pane");
+    questionPane.appendChild(hRich("h1", "title", model.question || "（无题干）"));
+    if (model.hint) questionPane.appendChild(buildHint(model.hint));
+    root.appendChild(questionPane);
     root.appendChild(buildBoard());
     root.appendChild(buildToolbar());
     root.appendChild(buildActions());

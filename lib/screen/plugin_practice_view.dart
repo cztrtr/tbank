@@ -261,6 +261,9 @@ class _PluginPracticeViewState extends State<PluginPracticeView> {
             completeImages,
           );
           break;
+        case 'tbankConfigGet':
+          result = await PluginManager.readConfig(widget.pluginId);
+          break;
         case 'tbankReadBank':
           final QuestionBankFile? bankFile = widget.bankFile;
           if (bankFile == null) throw StateError('当前没有题库文件');

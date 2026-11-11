@@ -287,7 +287,7 @@ button:disabled { opacity: .45; cursor: default; }
 
 .scratch-board-wrap {
   position: relative;
-  height: 280px;
+  height: clamp(320px, 48vh, 520px);
   overflow: auto;
   border: 1px solid var(--line);
   border-radius: 10px;

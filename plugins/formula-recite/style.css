@@ -85,6 +85,15 @@ body { overscroll-behavior: none; overflow-x: hidden; }
   flex: 0 0 auto;
 }
 
+/* 题目/提示独立滚动：长题干、长公式不会被裁掉。 */
+.question-pane {
+  min-width: 0;
+  max-height: 38vh;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding-right: 2px;
+}
+
 /* ---------- 提示 ---------- */
 .hint-row { display: flex; flex-direction: column; gap: 6px; flex: 0 0 auto; }
 
@@ -500,11 +509,10 @@ details.raw-ai pre {
   .app {
     display: grid;
     grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
-    grid-template-rows: auto auto auto auto auto minmax(0, 1fr);
+    grid-template-rows: auto auto auto auto minmax(0, 1fr);
     grid-template-areas:
       "top top"
-      "title board"
-      "hint board"
+      "question board"
       "toolbar board"
       "actions board"
       "result board";
@@ -515,8 +523,14 @@ details.raw-ai pre {
   }
 
   .topbar { grid-area: top; }
-  .title { grid-area: title; font-size: clamp(16px, 1.5vw + 6px, 23px); }
-  .hint-row { grid-area: hint; }
+  .question-pane {
+    grid-area: question;
+    max-height: 40vh;
+    min-height: 0;
+    overflow: auto;
+  }
+  .title { font-size: clamp(16px, 1.5vw + 6px, 23px); }
+  .hint-row { grid-area: auto; }
   .board-wrap { grid-area: board; height: 100%; min-height: 0; }
   .toolbar { grid-area: toolbar; align-content: start; }
   .actions { grid-area: actions; }
