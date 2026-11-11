@@ -1,7 +1,7 @@
 {
   "id": "formula-recite",
   "name": "公式默写",
-  "version": "1.1.3",
+  "version": "1.1.4",
   "apiVersion": 1,
   "description": "手写默写数学/物理公式，AI 判分 + 自评兜底，支持计时",
   "types": [

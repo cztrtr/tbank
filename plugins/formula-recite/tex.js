@@ -300,14 +300,33 @@
     return out;
   }
 
+  function renderMath(source, display) {
+    var value = String(source === undefined || source === null ? "" : source).trim();
+    if (!value) return "";
+    var engine = typeof globalThis !== "undefined" ? globalThis.katex : null;
+    if (engine && typeof engine.renderToString === "function") {
+      try {
+        return engine.renderToString(value, {
+          displayMode: !!display,
+          throwOnError: false,
+          strict: false,
+          output: "html"
+        });
+      } catch (error) {
+        // KaTeX 解析失败时退回轻量排版，保证公式仍可见
+      }
+    }
+    return render(escapeHtml(value));
+  }
+
   function renderTex(source) {
     if (!source) return "";
-    return render(escapeHtml(String(source).trim()));
+    return renderMath(source, false);
   }
 
   // 题干、提示、解析里常把公式混在中文句子里，形如：
   //   写出函数 $f(x)$ 在点 $x_0$ 处的导数
-  // 这里把 $...$ / $$...$$ / \(...\) / \[...\] 切出来交给 renderTex，正文保持转义后的纯文本。
+  // 这里把 $...$ / $$...$$ / \(...\) / \[...\] 切出来交给 KaTeX，正文保持转义后的纯文本。
   // 落单的 $（如「价格 $5 元」）不动，避免把正文吃掉。
   var RICH = /\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\$([^$\n]+?)\$|\\\(([\s\S]+?)\\\)/g;
 
@@ -327,7 +346,7 @@
       else if (match[3] !== undefined) body = match[3];
       else body = match[4];
       out += '<span class="' + (isDisplay ? "tex-display" : "tex-inline") + '">' +
-        renderTex(body) + "</span>";
+        renderMath(body, isDisplay) + "</span>";
       last = match.index + match[0].length;
     }
     out += escapeHtml(source.slice(last));

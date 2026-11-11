@@ -14,6 +14,9 @@
   var lastQuestionId = '';
   var pendingCalls = {};
   var callSeq = 0;
+  var scratchOpen = false;
+  var scratchBoard = null;
+  var scratchTool = 'pen';
 
   function esc(value) {
     return String(value == null ? '' : value)
@@ -113,6 +116,11 @@
       aiScore = null;
       aiError = '';
       showAnswer = false;
+      scratchOpen = false;
+      if (scratchBoard) {
+        scratchBoard.dispose();
+        scratchBoard = null;
+      }
       lastQuestionId = id;
     } else if (Array.isArray(next.selected)) {
       selected = new Set(next.selected);
@@ -139,7 +147,7 @@
     var total = Math.max(1, ctx.total || 1);
     var progress = Math.round(((ctx.index || 0) + 1) / total * 100);
 
-    var html = '';
+    var html = '<div class="practice-main">';
     html += '<div class="meta-row"><span>第 ' + ((ctx.index || 0) + 1) +
       ' / ' + total + ' 题</span><span class="badge">' +
       typeLabel(q.type) + '</span></div>';
@@ -256,9 +264,57 @@
       }
     }
 
+    html += '</div>'; // practice-main
+
+    // 最下方的手写区入口：所有题型都可以当草稿用；
+    // 填空/证明题可以把画布直接加入作答图片。
+    var scratchTitle = isFill ? '手写作答' : '手写草稿';
+    html += '<div class="scratch-toggle-row">' +
+      '<button class="outline" data-action="scratch-toggle">' +
+      (scratchOpen ? '收起手写区' : '展开手写区') + '</button></div>';
+    if (scratchOpen) {
+      html += '<div class="scratch-wrap" id="scratch-wrap">' +
+        '<div class="scratch-head"><span>' + scratchTitle + '</span>' +
+        '<span class="scratch-tip">支持触控笔 / 数位板，可手写后加入作答</span></div>' +
+        '<div class="scratch-board-wrap"><canvas class="scratch-board"></canvas></div>' +
+        '<div class="scratch-tools">' +
+        '<button class="outline" data-action="scratch-pen">笔</button>' +
+        '<button class="outline" data-action="scratch-eraser">橡皮</button>' +
+        '<button class="outline" data-action="scratch-undo">撤销</button>' +
+        '<button class="outline" data-action="scratch-clear">清空</button>' +
+        (isFill && !answered && !showAnswer
+          ? '<button class="primary" data-action="scratch-add">加入作答</button>'
+          : '') +
+        '</div></div>';
+    }
+
+    app.className = 'app' + (scratchOpen ? ' has-scratch' : '');
     app.innerHTML = html;
     bind();
     renderMath(0);
+    mountScratch();
+  }
+
+  function mountScratch() {
+    if (scratchBoard) {
+      scratchBoard.dispose();
+      scratchBoard = null;
+    }
+    if (!scratchOpen) return;
+    var canvas = document.querySelector('.scratch-board');
+    if (!canvas) return;
+    if (typeof DrawBoard === 'undefined') {
+      scratchOpen = false;
+      aiError = '手写组件未加载';
+      render();
+      return;
+    }
+    scratchBoard = new DrawBoard(canvas, {
+      penWidth: 3,
+      grid: true,
+      tool: scratchTool === 'eraser' ? 'eraser' : 'pen'
+    });
+    scratchBoard.mount();
   }
 
   function renderMath(attempt) {
@@ -367,6 +423,25 @@
           pickImage('camera');
         } else if (action === 'pick-gallery') {
           pickImage('gallery');
+        } else if (action === 'scratch-toggle') {
+          scratchOpen = !scratchOpen;
+          if (!scratchOpen && scratchBoard) {
+            scratchBoard.dispose();
+            scratchBoard = null;
+          }
+          render();
+        } else if (action === 'scratch-pen') {
+          scratchTool = 'pen';
+          if (scratchBoard) scratchBoard.setTool('pen');
+        } else if (action === 'scratch-eraser') {
+          scratchTool = 'eraser';
+          if (scratchBoard) scratchBoard.setTool('eraser');
+        } else if (action === 'scratch-undo') {
+          if (scratchBoard) scratchBoard.undo();
+        } else if (action === 'scratch-clear') {
+          if (scratchBoard) scratchBoard.clear();
+        } else if (action === 'scratch-add') {
+          addScratchToAnswer();
         }
       });
     });
@@ -394,6 +469,22 @@
     var ok = selected.size === correctSet.size &&
       Array.from(selected).every(function (key) { return correctSet.has(key); });
     hostCall('tbankSubmit', { correct: ok, selected: Array.from(selected) });
+  }
+
+  function addScratchToAnswer() {
+    if (!ctx || ctx.question.type !== 'fill_blank') return;
+    if (answerImages.length >= 4) {
+      hostCall('tbankToast', { message: '最多上传 4 张作答图片' });
+      return;
+    }
+    if (!scratchBoard || scratchBoard.isEmpty()) {
+      hostCall('tbankToast', { message: '手写区还没有内容' });
+      return;
+    }
+    answerImages.push(scratchBoard.toPngDataUrl({ maxEdge: 1600, crop: true }));
+    scratchOpen = false;
+    aiError = '';
+    render();
   }
 
   async function submitFillAi() {

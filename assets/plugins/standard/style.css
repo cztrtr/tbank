@@ -252,3 +252,131 @@ button:disabled { opacity: .45; cursor: default; }
 .card.bad .card-title { color: var(--bad); }
 .card .line { font-size: 14px; word-break: break-word; }
 .muted { color: var(--muted); font-size: 12px; }
+
+/* ---------- 手写草稿 / 作答区 ---------- */
+.practice-main { min-width: 0; }
+
+.scratch-toggle-row {
+  display: flex;
+  margin-top: 16px;
+}
+
+.scratch-toggle-row button { flex: 1; }
+
+.scratch-wrap {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--card);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.scratch-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.scratch-tip { color: var(--muted); font-size: 11px; font-weight: 400; }
+
+.scratch-board-wrap {
+  position: relative;
+  height: 280px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  overscroll-behavior: contain;
+  scrollbar-width: auto;
+  scrollbar-color: var(--line) transparent;
+}
+
+.scratch-board-wrap::-webkit-scrollbar { width: 17px; height: 17px; }
+.scratch-board-wrap::-webkit-scrollbar-track { background: transparent; }
+.scratch-board-wrap::-webkit-scrollbar-thumb {
+  background: #c7c7cf;
+  border-radius: 999px;
+  border: 2px solid #fff;
+}
+
+canvas.scratch-board {
+  display: block;
+  width: 200%;
+  height: 200%;
+  min-height: 0;
+  border: 0;
+  background: #fff;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  cursor: crosshair;
+}
+
+canvas.scratch-board.has-grid {
+  background-image:
+    linear-gradient(to right, rgba(0, 0, 0, 0.06) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(0, 0, 0, 0.06) 1px, transparent 1px);
+  background-size: 26px 26px;
+}
+
+.scratch-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.scratch-tools button {
+  flex: 1;
+  min-width: 72px;
+  min-height: 40px;
+  padding: 8px 10px;
+  font-size: 14px;
+}
+
+@media (orientation: landscape) {
+  html, body { height: 100%; overflow: hidden; }
+
+  .app {
+    max-width: none;
+    height: 100%;
+    margin: 0;
+    padding: 10px 14px;
+    overflow-y: auto;
+  }
+
+  .app.has-scratch {
+    display: grid;
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+    grid-template-areas: "main scratch";
+    gap: 12px;
+    height: 100%;
+    overflow: hidden;
+  }
+
+  .practice-main {
+    grid-area: main;
+    min-height: 0;
+    overflow-y: auto;
+    padding-right: 2px;
+  }
+
+  .scratch-wrap {
+    grid-area: scratch;
+    height: 100%;
+    min-height: 0;
+    margin-top: 0;
+  }
+
+  .scratch-board-wrap {
+    flex: 1;
+    min-height: 0;
+    height: auto;
+  }
+}

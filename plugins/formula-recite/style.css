@@ -28,7 +28,7 @@ html, body {
   overscroll-behavior: none;
 }
 
-body { overscroll-behavior: none; }
+body { overscroll-behavior: none; overflow-x: hidden; }
 
 /* 整页铺满：题干在上，画布吃掉剩余高度，工具栏和主按钮固定在下方。 */
 .app {
@@ -41,6 +41,7 @@ body { overscroll-behavior: none; }
   padding-right: calc(var(--pad) + env(safe-area-inset-right));
   height: 100%;
   overflow-y: auto;
+  overflow-x: hidden;
   overscroll-behavior: contain;
 }
 
@@ -124,7 +125,7 @@ body { overscroll-behavior: none; }
 }
 
 /* 让下方/右侧滚动条一直有可见的拖动条，画布可以写到视口外。 */
-.board-wrap::-webkit-scrollbar { width: 25px; height: 25px; }
+.board-wrap::-webkit-scrollbar { width: 17px; height: 17px; }
 .board-wrap::-webkit-scrollbar-track { background: transparent; }
 .board-wrap::-webkit-scrollbar-thumb {
   background: #c7c7cf;
@@ -228,6 +229,17 @@ canvas.board.has-grid {
 }
 
 .result {
+  border: 0;
+  background: transparent;
+  border-radius: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* 判分区单独一块，对错只影响这一块的背景。 */
+.result-verdict {
   border: 1px solid var(--line);
   background: var(--surface);
   border-radius: 14px;
@@ -237,8 +249,31 @@ canvas.board.has-grid {
   gap: 10px;
 }
 
-.result.is-correct { border-color: var(--ok); background: var(--ok-soft); }
-.result.is-wrong { border-color: var(--bad); background: var(--bad-soft); }
+.result-verdict.is-correct { border-color: var(--ok); background: var(--ok-soft); }
+.result-verdict.is-wrong { border-color: var(--bad); background: var(--bad-soft); }
+
+.result.is-grading {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: 14px;
+  padding: 14px;
+}
+
+/* 解析区始终白底，不跟判分区的红/绿背景走。 */
+.result-detail {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: 14px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.result-detail .explain {
+  border-top: 0;
+  padding-top: 0;
+}
 
 .result-head {
   display: flex;
@@ -456,6 +491,42 @@ details.raw-ai pre {
   border-radius: 8px;
   padding: 8px;
   margin: 6px 0 0;
+}
+
+/* ---------- 横屏：左侧题目/判分，右侧手写板 ---------- */
+@media (orientation: landscape) {
+  html, body { height: 100%; overflow: hidden; }
+
+  .app {
+    display: grid;
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+    grid-template-rows: auto auto auto auto auto minmax(0, 1fr);
+    grid-template-areas:
+      "top top"
+      "title board"
+      "hint board"
+      "toolbar board"
+      "actions board"
+      "result board";
+    height: 100%;
+    overflow: hidden;
+    padding: 10px 14px;
+    gap: 8px 14px;
+  }
+
+  .topbar { grid-area: top; }
+  .title { grid-area: title; font-size: clamp(16px, 1.5vw + 6px, 23px); }
+  .hint-row { grid-area: hint; }
+  .board-wrap { grid-area: board; height: 100%; min-height: 0; }
+  .toolbar { grid-area: toolbar; align-content: start; }
+  .actions { grid-area: actions; }
+  .result-host { grid-area: result; min-height: 0; overflow-y: auto; }
+
+  .app.has-result .board-wrap {
+    flex: none;
+    height: 100%;
+    min-height: 0;
+  }
 }
 
 /* ---------- 横屏矮屏 / 平板 ---------- */

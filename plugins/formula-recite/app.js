@@ -638,14 +638,17 @@
     var card = h("div", "result");
 
     if (mode === "grading") {
+      card.classList.add("is-grading");
       card.appendChild(h("div", "result-head", "AI 阅卷中…"));
       card.appendChild(h("div", "note", "正在把手写内容发给 DeepSeek 比对。最长等 120 秒，别急喵。"));
       host.appendChild(card);
       return;
     }
 
+    // 判分区独立成一块：只有这块跟随对错变色。
+    var panel = h("div", "result-verdict");
     if (mode === "confirm" || mode === "submitted") {
-      card.classList.add(recommended ? "is-correct" : "is-wrong");
+      panel.classList.add(recommended ? "is-correct" : "is-wrong");
     }
 
     var head = h("div", "result-head");
@@ -659,28 +662,28 @@
     if (verdict && mode !== "selfCheck") {
       head.appendChild(h("span", "result-score", verdict.score + " / 10"));
     }
-    card.appendChild(head);
+    panel.appendChild(head);
 
     if (verdict && (mode === "confirm" || mode === "submitted")) {
       var recognized = h("div", "result-row");
       recognized.appendChild(h("span", "result-label", "AI 读到的手写内容"));
       recognized.appendChild(document.createTextNode(verdict.recognized || "（没有识别出内容）"));
-      card.appendChild(recognized);
-      if (verdict.reason) card.appendChild(h("div", "note", verdict.reason));
+      panel.appendChild(recognized);
+      if (verdict.reason) panel.appendChild(h("div", "note", verdict.reason));
     }
 
     var answerRow = h("div", "result-row");
     answerRow.appendChild(h("span", "result-label", "标准答案"));
     renderAnswerInto(answerRow);
-    card.appendChild(answerRow);
+    panel.appendChild(answerRow);
 
-    if (state.aiError) card.appendChild(h("div", "error-box", state.aiError));
+    if (state.aiError) panel.appendChild(h("div", "error-box", state.aiError));
 
     if (state.aiRaw) {
       var rawBox = h("details", "raw-ai");
       rawBox.appendChild(h("summary", "", "模型原文（排查用）"));
       rawBox.appendChild(h("pre", "raw-text", state.aiRaw));
-      card.appendChild(rawBox);
+      panel.appendChild(rawBox);
     }
 
     if (mode !== "submitted") {
@@ -697,11 +700,15 @@
       });
       buttons.appendChild(yes);
       buttons.appendChild(no);
-      card.appendChild(buttons);
+      panel.appendChild(buttons);
     }
+    card.appendChild(panel);
 
+    // 解析区独立成块，始终保持白底，不受判分区红/绿背景影响。
+    var detail = h("div", "result-detail");
     var actions = h("div", "result-actions");
-    if (state.context && state.context.aiEnabled) {
+    var aiEnabled = !!(state.context && state.context.aiEnabled);
+    if (aiEnabled) {
       var explainBtn = h("button", "ghost", "AI 解析");
       explainBtn.addEventListener("click", function () {
         requestExplain(explainBtn);
@@ -709,7 +716,7 @@
       state.explainBtn = explainBtn;
       actions.appendChild(explainBtn);
     }
-    if (mode === "selfCheck") {
+    if (mode === "selfCheck" && aiEnabled) {
       var retry = h("button", "ghost", "重试 AI");
       retry.addEventListener("click", function () {
         if (!state.context || !state.context.aiEnabled) return;
@@ -719,17 +726,23 @@
       });
       actions.appendChild(retry);
     }
-    if (actions.children.length > 0) card.appendChild(actions);
+    if (actions.children.length > 0) detail.appendChild(actions);
 
     var analysis = state.context && state.context.question && state.context.question.analysis;
     if (typeof analysis === "string" && analysis.trim() !== "") {
-      card.appendChild(hRich("div", "explain", analysis));
+      var analysisNode = h("div", "explain ai-rich");
+      analysisNode.innerHTML = renderAiMarkdown(analysis);
+      detail.appendChild(analysisNode);
     }
 
-    var explainNode = h("div", "explain ai-rich");
-    explainNode.hidden = true;
-    state.explainNode = explainNode;
-    card.appendChild(explainNode);
+    if (aiEnabled) {
+      var explainNode = h("div", "explain ai-rich");
+      explainNode.hidden = true;
+      state.explainNode = explainNode;
+      detail.appendChild(explainNode);
+    }
+
+    if (detail.children.length > 0) card.appendChild(detail);
 
     host.appendChild(card);
   }

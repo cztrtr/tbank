@@ -539,10 +539,15 @@ class _PracticePageState extends State<PracticePage>
   @override
   Widget build(BuildContext context) {
     final bank = widget.bank;
+    final bool isLandscape =
+        MediaQuery.orientationOf(context) == Orientation.landscape;
 
     // 标题用题库展示名（子目录题库带「子目录/」前缀），方便确认当前是哪一份。
     return Scaffold(
-      appBar: AppBar(title: Text(bank?.displayName ?? '练习')),
+      // 横屏把顶部空间留给题目/手写区。
+      appBar: isLandscape
+          ? null
+          : AppBar(title: Text(bank?.displayName ?? '练习')),
       body: _buildBody(bank),
     );
   }

@@ -45,33 +45,37 @@ class _MainScreenState extends State<MainScreen> {
 
     return Scaffold(
       body: IndexedStack(index: _currentIndex, children: pages),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _currentIndex,
-        onDestinationSelected: (index) =>
-            setState(() => _currentIndex = index),
-        destinations: const <NavigationDestination>[
-          NavigationDestination(
-            icon: Icon(Icons.home_outlined),
-            selectedIcon: Icon(Icons.home),
-            label: '首页',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.collections_bookmark_outlined),
-            selectedIcon: Icon(Icons.collections_bookmark),
-            label: '管理',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.quiz_outlined),
-            selectedIcon: Icon(Icons.quiz),
-            label: '练习',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.person_outline),
-            selectedIcon: Icon(Icons.person),
-            label: '我的',
-          ),
-        ],
-      ),
+      // 横屏时优先把高度留给练习/手写区，不显示底部导航。
+      bottomNavigationBar:
+          MediaQuery.orientationOf(context) == Orientation.landscape
+          ? null
+          : NavigationBar(
+              selectedIndex: _currentIndex,
+              onDestinationSelected: (index) =>
+                  setState(() => _currentIndex = index),
+              destinations: const <NavigationDestination>[
+                NavigationDestination(
+                  icon: Icon(Icons.home_outlined),
+                  selectedIcon: Icon(Icons.home),
+                  label: '首页',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.collections_bookmark_outlined),
+                  selectedIcon: Icon(Icons.collections_bookmark),
+                  label: '管理',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.quiz_outlined),
+                  selectedIcon: Icon(Icons.quiz),
+                  label: '练习',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.person_outline),
+                  selectedIcon: Icon(Icons.person),
+                  label: '我的',
+                ),
+              ],
+            ),
     );
   }
 }
