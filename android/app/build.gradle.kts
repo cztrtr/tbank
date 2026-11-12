@@ -19,6 +19,23 @@ val keystoreProperties = Properties().apply {
     }
 }
 
+// 目标 ABI 列表：默认只出 arm64-v8a（安装包约 28 MB，三架构通用包约 65 MB）。
+//
+// 第三方依赖（dartjni 等）的 jniLibs 不受 `flutter build --target-platform`
+// 约束，不显式限定就会残留 32 位 / x86 的 so，让 APK 误声明支持这些架构 ——
+// 装得上却启动不了。
+//
+// 要出多架构包时只改这一行，例如：
+//   setOf("arm64-v8a", "armeabi-v7a")
+// 下面的 ndk 过滤和 packaging 排除都以它为准，不用改别处。
+val targetAbis: Set<String> = setOf("arm64-v8a")
+
+// Android 认识的 ABI 目录名；不在 [targetAbis] 里的会在打包阶段被排除。
+val knownAbiDirs = listOf(
+    "armeabi", "armeabi-v7a", "arm64-v8a",
+    "x86", "x86_64", "mips", "mips64",
+)
+
 android {
     namespace = "com.example.tbank"
     compileSdk = flutter.compileSdkVersion
@@ -44,6 +61,22 @@ android {
         // flag during build.
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+
+        // 只编目标 ABI 的原生库（默认 arm64-v8a，见文件头的 targetAbis）
+        ndk {
+            abiFilters.addAll(targetAbis)
+        }
+    }
+
+    // 预编译 so（第三方 aar / pub 包里的 jniLibs）不受 ndk.abiFilters 约束，
+    // 必须在打包阶段排除，否则 APK 会误声明支持 32 位和 x86 —— 装得上却起不来。
+    packaging {
+        jniLibs {
+            excludes += knownAbiDirs
+                .filter { it !in targetAbis }
+                .map { "lib/$it/**" }
+                .toSet()
+        }
     }
 
     signingConfigs {

@@ -2,13 +2,20 @@ package com.example.tbank
 
 import android.app.Activity
 import android.content.Intent
+import android.content.ServiceConnection
+import android.content.ComponentName
+import android.content.Context
 import android.net.Uri
+import android.os.Binder
 import android.os.Build
 import android.os.Handler
+import android.os.IBinder
 import android.os.Looper
+import android.os.Parcel
 import android.provider.DocumentsContract
 import android.provider.Settings
 import android.util.Log
+import android.view.KeyEvent
 import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -45,6 +52,37 @@ class MainActivity : FlutterActivity() {
 
     private val io: ExecutorService = Executors.newSingleThreadExecutor()
     private val main: Handler = Handler(Looper.getMainLooper())
+
+    // ---------------------------------------------------------------- 手写笔手势通道
+    //
+    // 小米焦点触控笔 Pro 的轻捏/双击/上下滑不经过普通输入事件，必须先向系统
+    // PencilEngine 服务注册回调、启用触控能力，系统才会把 194~197 四个键码
+    // 投递到 Activity。这里只用 Binder 直连，不引入小米的私有 AAR；
+    // 非小米设备或服务不存在时静默降级，书写不受影响。
+    private val penChannelName = "tbank/pen_gesture"
+    private var penChannel: MethodChannel? = null
+    private var penService: IBinder? = null
+    private var penBound = false
+
+    private val penCallback: Binder = object : Binder() {
+        override fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
+            // 系统回调里事务 1 是取色结果，手势不走这里，直接忽略。
+            return true
+        }
+    }
+
+    private val penConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+            Log.i(tag, "手写笔服务已连接")
+            penService = service
+            registerPenEngine(service)
+        }
+
+        override fun onServiceDisconnected(name: ComponentName?) {
+            Log.w(tag, "手写笔服务断开")
+            penService = null
+        }
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -128,9 +166,115 @@ class MainActivity : FlutterActivity() {
                     result.error("update_error", e.message ?: e.toString(), null)
                 }
             }
+
+        // 手写笔手势（小米焦点触控笔 Pro 的 194~197）转发通道。
+        penChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            penChannelName
+        )
     }
 
     // ---------------------------------------------------------------- 目录选择
+
+    // ---------------------------------------------------------------- 手写笔服务
+
+    private fun bindPenEngine() {
+        if (penBound) return
+        try {
+            val intent = Intent().setClassName(
+                "com.xiaomi.touchservice",
+                "com.xiaomi.touchservice.pencilengine.PencilEngineManagerService"
+            )
+            penBound = bindService(intent, penConnection, Context.BIND_AUTO_CREATE)
+            Log.i(tag, "绑定手写笔服务：$penBound")
+        } catch (error: Exception) {
+            penBound = false
+            Log.w(tag, "绑定手写笔服务失败（非小米设备可忽略）：${error.message}")
+        }
+    }
+
+    private fun unbindPenEngine() {
+        if (!penBound) return
+        try {
+            unbindService(penConnection)
+        } catch (_: Exception) {
+        }
+        penBound = false
+        penService = null
+    }
+
+    private fun penEngineVersion(): String {
+        return try {
+            Settings.System.getString(contentResolver, "stylus_pencil_engine_version") ?: ""
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    private fun registerPenEngine(service: IBinder?) {
+        if (service == null) return
+        try {
+            val data = Parcel.obtain()
+            val reply = Parcel.obtain()
+            try {
+                data.writeInterfaceToken("com.xiaomi.touchservice.pencilengine.IPencilEngine")
+                data.writeStrongBinder(penCallback)
+                // 0.3.2 用事务 4（回调 + 包名），其余版本用事务 1。
+                if (penEngineVersion() == "0.3.2") {
+                    data.writeString(packageName)
+                    service.transact(4, data, reply, 0)
+                } else {
+                    service.transact(1, data, reply, 0)
+                }
+            } finally {
+                data.recycle()
+                reply.recycle()
+            }
+            enablePenCapability(service, 2)
+            Log.i(tag, "手写笔手势已注册")
+        } catch (error: Exception) {
+            Log.w(tag, "注册手写笔手势失败：${error.message}")
+        }
+    }
+
+    private fun enablePenCapability(service: IBinder, capability: Int) {
+        try {
+            val data = Parcel.obtain()
+            val reply = Parcel.obtain()
+            try {
+                data.writeInterfaceToken("com.xiaomi.touchservice.pencilengine.IPencilEngine")
+                data.writeInt(capability)
+                data.writeInt(1)
+                service.transact(3, data, reply, 0)
+            } finally {
+                data.recycle()
+                reply.recycle()
+            }
+        } catch (error: Exception) {
+            Log.w(tag, "启用书写能力失败：${error.message}")
+        }
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val code = event.keyCode
+        if (code in 194..197) {
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                penChannel?.invokeMethod("key", code)
+            }
+            return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        bindPenEngine()
+    }
+
+    override fun onPause() {
+        unbindPenEngine()
+        super.onPause()
+    }
 
     private fun pickDirectory(result: MethodChannel.Result) {
         if (pendingPickResult != null) {
@@ -526,6 +670,7 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        unbindPenEngine()
         io.shutdown()
         super.onDestroy()
     }

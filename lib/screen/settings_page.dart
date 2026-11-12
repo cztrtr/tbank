@@ -33,6 +33,12 @@ class _SettingsPageState extends State<SettingsPage> {
   String? _updateMessage; // 更新结果 / 错误提示
   File? _downloadedFile; // 下载好的安装包（桌面端用来展示路径）
 
+  // 笔尖双击间隔（毫秒），滑块拖动时先改本地状态，松手才落盘。
+  int _penDoubleTapMs = AppConfig.penDoubleTapMs;
+
+  // 手写板是否屏蔽手指落笔；开关切换后立即落盘。
+  bool _penOnlyInput = AppConfig.penOnlyInput;
+
   @override
   void dispose() {
     _keyController.dispose();
@@ -277,6 +283,75 @@ class _SettingsPageState extends State<SettingsPage> {
                 MaterialPageRoute<void>(builder: (_) => const PluginsPage()),
               ),
             ),
+          ),
+
+          const SizedBox(height: 28),
+          const Divider(),
+          const SizedBox(height: 16),
+
+          // ---- 手写笔 ----
+          Text(
+            '手写笔',
+            style: textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '笔尖双击切换笔 / 橡皮的时间窗，平板手写笔和数位板通用。'
+            '小米焦点触控笔 Pro 的系统级双击由原生手势接管，不受这里影响。',
+            style: TextStyle(
+              fontSize: 12,
+              height: 1.5,
+              color: colorScheme.onSurfaceVariant,
+            ),
+          ),          const SizedBox(height: 6),
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: Slider(
+                  value: _penDoubleTapMs.toDouble(),
+                  min: AppConfig.penDoubleTapMin.toDouble(),
+                  max: AppConfig.penDoubleTapMax.toDouble(),
+                  divisions:
+                      (AppConfig.penDoubleTapMax - AppConfig.penDoubleTapMin) ~/
+                      10,
+                  label: '$_penDoubleTapMs ms',
+                  onChanged: (double value) {
+                    setState(() => _penDoubleTapMs = value.round());
+                  },
+                  onChangeEnd: (double value) {
+                    AppConfig.setPenDoubleTapMs(value.round());
+                  },
+                ),
+              ),
+              SizedBox(
+                width: 64,
+                child: Text(
+                  '$_penDoubleTapMs ms',
+                  textAlign: TextAlign.right,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 8),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            value: _penOnlyInput,
+            title: const Text('手写板屏蔽手指'),
+            subtitle: Text(
+              _penOnlyInput
+                  ? '只有手写笔能落笔，手指触摸不画线（仍可滚动页面）'
+                  : '手指和手写笔都能落笔',
+              style: const TextStyle(fontSize: 12, height: 1.4),
+            ),
+            onChanged: (bool value) {
+              setState(() => _penOnlyInput = value);
+              AppConfig.setPenOnlyInput(value);
+            },
           ),
 
           const SizedBox(height: 28),

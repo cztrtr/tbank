@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'screen/main_screen.dart';
 import 'services/app_config.dart';
 import 'services/mistake_books.dart';
+import 'services/pen_gesture.dart';
 import 'services/plugin_manager.dart';
 import 'services/plugin_runtime.dart';
 
@@ -18,6 +19,9 @@ import 'services/plugin_runtime.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized(); // path_provider 依赖平台通道，必须先初始化绑定
   await AppConfig.init(); // 读配置：有文件就解析，没有就创建，内容进内存
+
+  // 手写笔系统手势（小米焦点笔 Pro 的 195 双击等）：没有该硬件的设备上事件流为空。
+  PenGesture.init();
 
   // 正式包启用插件运行时；widget 测试默认关闭，继续用原生练习页
   PluginRuntime.enabled = true;

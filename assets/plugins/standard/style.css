@@ -173,6 +173,60 @@ button, textarea, input {
 
 .hint { color: var(--muted); font-size: 12px; margin: 8px 0 0; }
 
+/* ---- AI 解析 + 追问 ---- */
+.ai-card .line { margin-bottom: 4px; }
+
+/* 追问对话流：学生一列靠右、AI 一列靠左，气泡区分 */
+.ai-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--line);
+}
+
+.ai-turn {
+  max-width: 92%;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+}
+
+.ai-turn.is-user {
+  align-self: flex-end;
+  background: var(--primary-soft);
+  border-color: transparent;
+}
+
+.ai-turn.is-ai { align-self: flex-start; }
+
+.ai-turn-role {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+  margin-bottom: 3px;
+}
+
+.ai-turn.is-user .ai-turn-role { color: var(--primary); }
+
+.ai-turn-text { font-size: 14px; line-height: 1.55; word-break: break-word; }
+
+/* 追问输入区：始终贴在解析卡片底部 */
+.ai-followup { margin-top: 12px; }
+
+.ai-followup .answer-box,
+.ai-followup-box {
+  min-height: 60px;
+  font-size: 14px;
+  margin: 0;
+}
+
+.ai-followup .row { margin-top: 8px; }
+
+.ai-followup button { flex: 0 0 auto; min-width: 96px; margin-left: auto; }
+
 .thumbs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 
 .thumb {
@@ -329,15 +383,80 @@ canvas.scratch-board.has-grid {
 .scratch-tools {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
 }
 
 .scratch-tools button {
-  flex: 1;
-  min-width: 72px;
+  flex: 0 1 auto;
+  min-width: 64px;
   min-height: 40px;
   padding: 8px 10px;
   font-size: 14px;
+}
+
+.scratch-tools .scratch-tool {
+  min-width: 76px;
+  font-weight: 600;
+}
+
+.scratch-tools .scratch-tool.is-eraser {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: var(--primary-soft, rgba(47, 111, 237, 0.12));
+}
+
+.scratch-tools button.active {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: var(--primary-soft, rgba(47, 111, 237, 0.12));
+}
+
+.scratch-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px;
+}
+
+.scratch-width {
+  width: 92px;
+  accent-color: var(--primary);
+}
+
+.scratch-width-value {
+  min-width: 32px;
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- 切笔 / 橡皮的悬浮提示 ---- */
+
+.pen-hint {
+  position: fixed;
+  left: 50%;
+  bottom: 120px;
+  z-index: 900;
+  padding: 7px 18px;
+  border-radius: 999px;
+  background: rgba(22, 24, 28, .84);
+  color: #fff;
+  font-size: 14px;
+  line-height: 1.2;
+  font-weight: 600;
+  letter-spacing: .02em;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(-50%, 8px) scale(.96);
+  transition: opacity .16s ease, transform .16s ease;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .18);
+}
+
+.pen-hint.is-on {
+  opacity: 1;
+  transform: translate(-50%, 0) scale(1);
 }
 
 @media (orientation: landscape) {

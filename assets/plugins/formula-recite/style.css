@@ -593,3 +593,31 @@ details.raw-ai pre {
 }
 
 canvas.board.is-eraser { cursor: cell; }
+
+/* ---- 切笔 / 橡皮的悬浮提示 ---- */
+
+.pen-hint {
+  position: fixed;
+  left: 50%;
+  bottom: 120px;
+  z-index: 900;
+  padding: 7px 18px;
+  border-radius: 999px;
+  background: rgba(22, 24, 28, .84);
+  color: #fff;
+  font-size: 14px;
+  line-height: 1.2;
+  font-weight: 600;
+  letter-spacing: .02em;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(-50%, 8px) scale(.96);
+  transition: opacity .16s ease, transform .16s ease;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .18);
+}
+
+.pen-hint.is-on {
+  opacity: 1;
+  transform: translate(-50%, 0) scale(1);
+}

@@ -1,14 +1,17 @@
 import 'dart:async'; // unawaited
+import 'dart:io'; // Directory：定位 AI 出题目录
 
 import 'package:file_picker/file_picker.dart'; // 桌面端的目录选择器
 import 'package:flutter/material.dart';
 
 import '../models/question_bank_file.dart'; // 公共的题库文件模型
+import '../services/ai_question_generator.dart'; // AI 出题根目录
 import '../services/app_config.dart'; // 题库目录的全局列表
 import '../services/bank_io.dart'; // 统一的目录/文件访问入口
 import '../services/bank_repository.dart'; // 目录扫描 + AI 题库合并
 import '../services/mistake_books.dart'; // 添加目录时提前迁移题目 id
 import '../services/saf.dart'; // Android 的 SAF 目录选择
+import 'ai_bank_editor_page.dart'; // 题目管理器：增删改查 / AI 重出 / 纠错
 import 'variant_generate_page.dart'; // 基于已有题库的知识点重新出题
 
 /// 题库管理页：
@@ -45,6 +48,10 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
   bool _searching = false; // 是否处于搜索状态（标题栏换成输入框）
   String _query = ''; // 当前搜索关键词
 
+  /// AI 出题根目录（App Support 下的 `Question/`）；用于把它们单独归到
+  /// 「AI 出题」一组，而不是在界面上露出英文目录名。
+  String _aiRootPath = '';
+
   /// 按关键词过滤后的题库列表；关键词为空时返回全部。
   List<QuestionBankFile> get _filteredFiles {
     final String query = _query.trim().toLowerCase();
@@ -65,6 +72,19 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
 
     // 启动先扫一次；SAF 授权失效的目录会进入错误提示
     unawaited(_scanFiles());
+    unawaited(_loadAiRoot());
+  }
+
+  /// 记下 AI 出题目录的绝对路径，供分组时识别。
+  Future<void> _loadAiRoot() async {
+    try {
+      final Directory dir = await AiQuestionGenerator.rootDirectory();
+      if (!mounted) return;
+      setState(() => _aiRootPath = dir.path);
+    } catch (error) {
+      // 取不到就退回默认分组，不影响其它题库
+      debugPrint('定位 AI 出题目录失败：$error');
+    }
   }
 
   @override
@@ -174,6 +194,19 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => VariantGeneratePage(source: file),
+      ),
+    );
+    if (!mounted) return;
+    unawaited(_scanFiles());
+  }
+
+  /// 打开题目管理器：增删改查，以及选中题目让 AI 重新出题 / 纠正错误。
+  ///
+  /// 返回后重新扫描，题数、文件修改时间都会刷新。
+  Future<void> _openEditor(QuestionBankFile file) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => AiBankEditorPage(file: file),
       ),
     );
     if (!mounted) return;
@@ -324,8 +357,10 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
       );
     }
 
-    // 一个题库目录都没加
-    if (dirs.isEmpty) {
+    // 一个题库目录都没加、也没有任何题：才提示去添加。
+    // 注意不能只判断 dirs —— AI 出题生成的题库不在用户目录里，
+    // 只加了 AI 题的账号到这里必须继续往下渲染，否则「管理」页会一片空白。
+    if (dirs.isEmpty && _files.isEmpty) {
       return const Center(child: Text('还没有题库目录，点右上角 + 添加'));
     }
 
@@ -389,6 +424,17 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
     );
   }
 
+  /// 判断文件是否属于 AI 出题生成的目录。
+  ///
+  /// 是则返回统一的组 key（一级、二级目录都归到同一组），否则返回空串。
+  String _aiGroupKeyOf(QuestionBankFile file) {
+    if (_aiRootPath.isEmpty) return '';
+    final String root = _aiRootPath.replaceAll('\\', '/');
+    final String ref = file.rootDirectoryRef.replaceAll('\\', '/');
+    if (ref == root || ref.startsWith('$root/')) return 'ai:$root';
+    return '';
+  }
+
   /// 把扫描结果按「父文件夹 → 添加的文件夹 → 子目录 → 题库」渲染。
   ///
   /// 父文件夹是每个目录引用的上一层（见 [BankIo.parentOf]）：
@@ -413,13 +459,19 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
       final ({String key, String label})? parent = BankIo.parentOf(
         file.rootDirectoryRef,
       );
-      final String parentKey = parent?.key ?? file.rootDirectoryRef;
+      // AI 出题生成的题库统一挂到「AI 出题」一组，不露出 Question 这种目录名
+      final String aiKey = _aiGroupKeyOf(file);
+      final String parentKey = aiKey.isNotEmpty
+          ? aiKey
+          : (parent?.key ?? file.rootDirectoryRef);
       parentLabels.putIfAbsent(
         parentKey,
-        () => parent?.label ?? BankIo.displayNameOf(file.rootDirectoryRef),
+        () => aiKey.isNotEmpty
+            ? 'AI 出题'
+            : (parent?.label ?? BankIo.displayNameOf(file.rootDirectoryRef)),
       );
       // 没有可用的父级：这一组不画子文件夹标题，直接把文件列在父级下
-      if (parent == null) virtualParents.add(parentKey);
+      if (parent == null && aiKey.isEmpty) virtualParents.add(parentKey);
       tree
           .putIfAbsent(parentKey, () => <String, List<QuestionBankFile>>{})
           .putIfAbsent(file.rootDirectoryRef, () => <QuestionBankFile>[])
@@ -488,16 +540,18 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
                       ),
                     ),
                   ),
-                  IconButton(
-                    tooltip: '移除该题库目录',
-                    // 只删配置记录和目录授权，不删磁盘上的文件
-                    onPressed: () => _removeDirectoryFor(files.first),
-                    icon: Icon(
-                      Icons.delete_outline,
-                      size: 20,
-                      color: colorScheme.error,
+                  // AI 出题目录不在 config.json 里，没有「移除」这回事
+                  if (_aiGroupKeyOf(files.first).isEmpty)
+                    IconButton(
+                      tooltip: '移除该题库目录',
+                      // 只删配置记录和目录授权，不删磁盘上的文件
+                      onPressed: () => _removeDirectoryFor(files.first),
+                      icon: Icon(
+                        Icons.delete_outline,
+                        size: 20,
+                        color: colorScheme.error,
+                      ),
                     ),
-                  ),
                 ],
               ),
             ),
@@ -594,9 +648,21 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
                     ),
                     const SizedBox(width: 4),
                     IconButton(
+                      tooltip: '编辑题目',
+                      // 打开题目管理器：增删改查 + AI 重新出题 / 纠正错误
+                      onPressed: () => _openEditor(file),
+                      visualDensity: VisualDensity.compact,
+                      icon: Icon(
+                        Icons.edit_note,
+                        size: 20,
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    IconButton(
                       tooltip: 'AI 变式出题',
                       // 读取这份题库的知识点，重新出题并保存为 xxx-alpha.json / xxx-beta.json…
                       onPressed: () => _openVariantPage(file),
+                      visualDensity: VisualDensity.compact,
                       icon: Icon(
                         Icons.auto_awesome,
                         size: 20,

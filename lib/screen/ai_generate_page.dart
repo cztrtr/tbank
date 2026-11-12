@@ -5,6 +5,7 @@ import '../services/ai_question_generator.dart';
 import '../services/bank_io.dart';
 import '../services/ds_api_service.dart';
 import '../services/plugin_manager.dart';
+import 'ai_bank_editor_page.dart';
 import 'plugin_type_selector.dart';
 import 'practice_page.dart';
 
@@ -195,6 +196,24 @@ class _AiGeneratePageState extends State<AiGeneratePage> {
           ),
         )
         .then((_) => _loadBanks());
+  }
+
+  /// 打开题目管理器：查看 / 增删改查，并可以让 AI 重新出题或纠正错误。
+  Future<void> _openEditor(AiBankInfo bank) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => AiBankEditorPage(
+          file: QuestionBankFile(
+            name: bank.fileName,
+            uri: bank.path,
+            directoryRef: BankIo.directoryOfFile(bank.path),
+            directoryName: bank.topic,
+          ),
+        ),
+      ),
+    );
+    if (!mounted) return;
+    await _loadBanks();
   }
 
   @override
@@ -438,6 +457,12 @@ class _AiGeneratePageState extends State<AiGeneratePage> {
                 overflow: TextOverflow.ellipsis,
               ),
               subtitle: Text('${bank.questionCount} 题'),
+              trailing: IconButton(
+                tooltip: '管理题目',
+                // 增删改查 + 选中题目让 AI 重新出题 / 纠正错误
+                onPressed: () => _openEditor(bank),
+                icon: const Icon(Icons.edit_note, size: 20),
+              ),
               onTap: () => _openBank(bank),
             ),
           ),

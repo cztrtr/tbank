@@ -10,6 +10,10 @@
   var aiScoring = false;
   var aiScore = null;
   var aiError = '';
+  // AI 解析之后的追问对话：{role:'user'|'ai', text:string}
+  var aiThread = [];
+  var followUpText = '';
+  var followUpLoading = false;
   var showAnswer = false;
   var lastQuestionId = '';
   var pendingCalls = {};
@@ -18,6 +22,13 @@
   var scratchBoard = null;
   var scratchTool = 'pen';
   var scratchStrokes = [];
+  var scratchEraserMode = 'pixel';
+  var scratchPenWidth = 3;
+  var scratchGrid = true;
+  // 笔尖双击判定间隔，由 App 的「手写笔设置」通过 context.settings 注入。
+  var scratchDoubleTapMs = 320;
+  // 手写板是否屏蔽手指：true 时只有笔能落笔，手指只负责滚动。
+  var scratchPenOnly = false;
 
   function esc(value) {
     return String(value == null ? '' : value)
@@ -100,6 +111,29 @@
     if (theme.badSoft) style.setProperty('--bad-soft', theme.badSoft);
   }
 
+  // 手写板参数沿用上次用的：换题、换题库都从 context.settings 恢复，
+  // 用户调过的笔宽 / 橡皮模式 / 网格不会被重置。
+  function applyPenSettingsFrom(settings) {
+    if (!settings) return;
+    var width = Number(settings.penWidth);
+    if (isFinite(width) && width > 0) {
+      scratchPenWidth = Math.max(1, Math.min(12, Math.round(width)));
+    }
+    if (settings.eraserMode === 'stroke' || settings.eraserMode === 'pixel') {
+      scratchEraserMode = settings.eraserMode;
+    }
+    if (typeof settings.grid === 'boolean') {
+      scratchGrid = settings.grid;
+    }
+  }
+
+  // 把当前手写板参数回传给 App 保存，下次进别的题库继续用。
+  function savePenSettings(patch) {
+    hostCall('tbankSetPenSettings', patch).catch(function () {
+      /* 保存失败不影响写字 */
+    });
+  }
+
   window.__tbankReceive = function (next) {
     if (!next || !next.question) {
       ctx = next;
@@ -116,6 +150,9 @@
       aiScoring = false;
       aiScore = null;
       aiError = '';
+      aiThread = [];
+      followUpText = '';
+      followUpLoading = false;
       showAnswer = false;
       scratchOpen = false;
       scratchStrokes = [];
@@ -123,6 +160,7 @@
         scratchBoard.dispose();
         scratchBoard = null;
       }
+      applyPenSettingsFrom(next.settings);
       lastQuestionId = id;
     } else if (Array.isArray(next.selected)) {
       selected = new Set(next.selected);
@@ -130,6 +168,14 @@
 
     ctx = next;
     if (next.answered) showAnswer = true;
+    // App 设置页的「笔尖双击间隔」随 context 下发；没给就沿用 320ms。
+    if (next.settings && Number(next.settings.penDoubleTapMs) > 0) {
+      scratchDoubleTapMs = Number(next.settings.penDoubleTapMs);
+    }
+    // 「手写板屏蔽手指」开关同样随 context 下发。
+    if (next.settings && typeof next.settings.penOnlyInput === 'boolean') {
+      scratchPenOnly = next.settings.penOnlyInput;
+    }
     applyTheme();
     render();
   };
@@ -254,8 +300,29 @@
       if (aiLoading) {
         html += '<div class="card"><div class="muted">正在生成解析…</div></div>';
       } else if (aiText) {
-        html += '<div class="card"><div class="card-title">AI 解析</div>' +
-          '<div class="line">' + fmt(aiText) + '</div></div>';
+        html += '<div class="card ai-card"><div class="card-title">AI 解析</div>' +
+          '<div class="line" id="ai-answer">' + fmt(aiText) + '</div>';
+        // 追问对话流：解析之后再问的问题按「你 / AI」逐轮追加
+        if (aiThread.length) {
+          html += '<div class="ai-thread">';
+          aiThread.forEach(function (turn) {
+            html += '<div class="ai-turn ' + (turn.role === 'user' ? 'is-user' : 'is-ai') + '">' +
+              '<div class="ai-turn-role">' + (turn.role === 'user' ? '你' : 'AI') + '</div>' +
+              '<div class="ai-turn-text">' + fmt(turn.text) + '</div></div>';
+          });
+          html += '</div>';
+        }
+        // 追问输入窗：解析下面的常驻入口，回车（不带 Shift）也能发送
+        html += '<div class="ai-followup">' +
+          '<textarea class="answer-box ai-followup-box" id="followup" rows="2"' +
+          (followUpLoading ? ' disabled' : '') +
+          ' placeholder="还有哪里不明白？在这里继续追问">' +
+          esc(followUpText) + '</textarea>' +
+          '<div class="row"><button class="primary" data-action="ai-followup"' +
+          (followUpLoading ? ' disabled' : '') + '>' +
+          (followUpLoading ? 'AI 回答中…' : '追问') + '</button></div>' +
+          '</div>';
+        html += '</div>';
       }
     } else if (isFill && showAnswer) {
       html += '<div class="card"><div class="card-title">参考答案</div>' +
@@ -275,15 +342,29 @@
     html += '</div>'; // practice-main
 
     if (scratchOpen) {
+      var eraserHidden = scratchTool === 'eraser' ? '' : ' hidden';
       html += '<div class="scratch-wrap" id="scratch-wrap">' +
         '<div class="scratch-head"><span>' + scratchTitle + '</span>' +
-        '<span class="scratch-tip">支持触控笔 / 数位板，可手写后加入作答</span></div>' +
+        '<span class="scratch-tip">' +
+        (scratchPenOnly
+          ? '仅手写笔 · 笔杆键或笔尖双击切换工具'
+          : '压感笔 / 数位板 · 笔杆键或笔尖双击切换工具') +
+        '</span></div>' +
         '<div class="scratch-board-wrap"><canvas class="scratch-board"></canvas></div>' +
         '<div class="scratch-tools">' +
-        '<button class="outline" data-action="scratch-pen">笔</button>' +
-        '<button class="outline" data-action="scratch-eraser">橡皮</button>' +
+        '<button class="outline scratch-tool" id="btn-pen" data-action="scratch-toggle-tool">笔</button>' +
+        '<span class="scratch-group">' +
+        '<input class="scratch-width" id="scratch-width" type="range" min="1" max="12" step="1" value="' +
+        scratchPenWidth + '">' +
+        '<span class="scratch-width-value" id="scratch-width-value">' +
+        scratchPenWidth + 'px</span></span>' +
+        '<button class="outline scratch-mode" id="btn-pixel" data-action="scratch-mode-pixel"' +
+        eraserHidden + '>精确</button>' +
+        '<button class="outline scratch-mode" id="btn-stroke" data-action="scratch-mode-stroke"' +
+        eraserHidden + '>整笔</button>' +
         '<button class="outline" data-action="scratch-undo">撤销</button>' +
         '<button class="outline" data-action="scratch-clear">清空</button>' +
+        '<button class="outline" id="btn-grid" data-action="scratch-grid">网格</button>' +
         (isFill && !answered && !showAnswer
           ? '<button class="primary" data-action="scratch-add">加入作答</button>'
           : '') +
@@ -313,14 +394,89 @@
       return;
     }
     scratchBoard = new DrawBoard(canvas, {
-      penWidth: 3,
-      grid: true,
-      tool: scratchTool === 'eraser' ? 'eraser' : 'pen'
+      penWidth: scratchPenWidth,
+      grid: scratchGrid,
+      eraserMode: scratchEraserMode,
+      doubleTapMs: scratchDoubleTapMs,
+      penOnly: scratchPenOnly,
+      tool: scratchTool === 'eraser' ? 'eraser' : 'pen',
+      onGesture: function () {
+        toggleScratchTool(true);
+      }
     });
     scratchBoard.mount();
     if (scratchStrokes.length > 0) {
       scratchBoard.importStrokes(scratchStrokes);
     }
+    updateScratchToolUI();
+  }
+
+  // 切换笔/橡皮的悬浮提示：手写区上方淡入淡出，不走宿主的 SnackBar。
+  var penHintEl = null;
+  var penHintTimer = null;
+
+  function showPenHint(text) {
+    if (!document.body) return;
+    if (!penHintEl) {
+      penHintEl = document.createElement('div');
+      penHintEl.className = 'pen-hint';
+      document.body.appendChild(penHintEl);
+    }
+    penHintEl.textContent = text;
+    penHintEl.classList.remove('is-on');
+    // 读一次布局，让动画能从起点重新播放
+    void penHintEl.offsetWidth;
+    penHintEl.classList.add('is-on');
+
+    if (penHintTimer) clearTimeout(penHintTimer);
+    penHintTimer = setTimeout(function () {
+      penHintEl.classList.remove('is-on');
+    }, 900);
+  }
+
+  // 切换笔/橡皮：不动 DOM，只改状态和按钮外观，避免重绘把笔迹清掉。
+  function applyScratchTool(tool, notify) {
+    var next = tool === 'eraser' ? 'eraser' : 'pen';
+    scratchTool = next;
+    if (scratchBoard) scratchBoard.setTool(next);
+    updateScratchToolUI();
+    if (notify) showPenHint(next === 'eraser' ? '橡皮' : '笔');
+  }
+
+  function toggleScratchTool(notify) {
+    applyScratchTool(scratchTool === 'eraser' ? 'pen' : 'eraser', notify);
+  }
+
+  function setScratchEraserMode(mode) {
+    scratchEraserMode = mode === 'stroke' ? 'stroke' : 'pixel';
+    if (scratchBoard) scratchBoard.setEraserMode(scratchEraserMode);
+    updateScratchToolUI();
+    savePenSettings({ eraserMode: scratchEraserMode });
+  }
+
+  function updateScratchToolUI() {
+    var isEraser = scratchTool === 'eraser';
+    var penButton = document.getElementById('btn-pen');
+    if (penButton) {
+      penButton.textContent = isEraser ? '橡皮' : '笔';
+      penButton.classList.toggle('is-eraser', isEraser);
+    }
+    var pixel = document.getElementById('btn-pixel');
+    if (pixel) {
+      pixel.hidden = !isEraser;
+      pixel.classList.toggle('active', scratchEraserMode === 'pixel');
+    }
+    var stroke = document.getElementById('btn-stroke');
+    if (stroke) {
+      stroke.hidden = !isEraser;
+      stroke.classList.toggle('active', scratchEraserMode === 'stroke');
+    }
+    var grid = document.getElementById('btn-grid');
+    if (grid) grid.classList.toggle('active', scratchGrid);
+    var width = document.getElementById('scratch-width');
+    if (width) width.value = String(scratchPenWidth);
+    var widthValue = document.getElementById('scratch-width-value');
+    if (widthValue) widthValue.textContent = scratchPenWidth + 'px';
   }
 
   function renderMath(attempt) {
@@ -423,6 +579,8 @@
           hostCall('tbankSubmit', { correct: false, selected: [], answer: answerText });
         } else if (action === 'ai') {
           requestAi();
+        } else if (action === 'ai-followup') {
+          requestFollowUp();
         } else if (action === 'ai-submit') {
           submitFillAi();
         } else if (action === 'pick-camera') {
@@ -437,12 +595,21 @@
             scratchBoard = null;
           }
           render();
+        } else if (action === 'scratch-toggle-tool') {
+          toggleScratchTool(true);
         } else if (action === 'scratch-pen') {
-          scratchTool = 'pen';
-          if (scratchBoard) scratchBoard.setTool('pen');
+          applyScratchTool('pen');
         } else if (action === 'scratch-eraser') {
-          scratchTool = 'eraser';
-          if (scratchBoard) scratchBoard.setTool('eraser');
+          applyScratchTool('eraser');
+        } else if (action === 'scratch-mode-pixel') {
+          setScratchEraserMode('pixel');
+        } else if (action === 'scratch-mode-stroke') {
+          setScratchEraserMode('stroke');
+        } else if (action === 'scratch-grid') {
+          scratchGrid = !scratchGrid;
+          if (scratchBoard) scratchBoard.setGrid(scratchGrid);
+          updateScratchToolUI();
+          savePenSettings({ grid: scratchGrid });
         } else if (action === 'scratch-undo') {
           if (scratchBoard) scratchBoard.undo();
         } else if (action === 'scratch-clear') {
@@ -461,6 +628,20 @@
       });
     }
 
+    // 追问输入：只存状态不重绘（重绘会丢焦点），点按钮 / 回车时才发送。
+    var followup = document.getElementById('followup');
+    if (followup) {
+      followup.addEventListener('input', function () {
+        followUpText = followup.value;
+      });
+      followup.addEventListener('keydown', function (event) {
+        var key = event.key || '';
+        if (key !== 'Enter' || event.shiftKey) return; // Shift+Enter 换行
+        if (event.preventDefault) event.preventDefault();
+        requestFollowUp();
+      });
+    }
+
     document.querySelectorAll('[data-remove-image]').forEach(function (element) {
       element.addEventListener('click', function () {
         var index = Number(element.getAttribute('data-remove-image'));
@@ -470,7 +651,39 @@
         }
       });
     });
+
+    var widthRange = document.getElementById('scratch-width');
+    if (widthRange) {
+      widthRange.addEventListener('input', function () {
+        var value = Number(widthRange.value) || 3;
+        scratchPenWidth = Math.max(1, Math.min(12, value));
+        if (scratchBoard) scratchBoard.setPenWidth(scratchPenWidth);
+        var label = document.getElementById('scratch-width-value');
+        if (label) label.textContent = scratchPenWidth + 'px';
+      });
+      // 松手才落盘，拖动过程中不用每帧写文件
+      widthRange.addEventListener('change', function () {
+        savePenSettings({ width: scratchPenWidth });
+      });
+    }
   }
+
+  // 蓝牙笔 / 系统手势通道：App 收到 194~197 后转发过来，195 是双击。
+  // 手写区没展开时什么也不做，避免误切。
+  window.__tbankPenGesture = function (code) {
+    if (Number(code) !== 195) return false;
+    if (!scratchOpen || !scratchBoard) return false;
+    toggleScratchTool(true);
+    return true;
+  };
+
+  // WebView 自己收到按键时（部分设备会把 195 透传到页面）也接一下。
+  document.addEventListener('keydown', function (event) {
+    var code = event.keyCode || event.which;
+    if (code !== 195) return;
+    if (event.preventDefault) event.preventDefault();
+    window.__tbankPenGesture(195);
+  });
 
   function submitChoice() {
     var correctSet = new Set(ctx.question.correctAnswers || []);
@@ -637,6 +850,8 @@
   async function requestAi() {
     if (aiLoading) return;
     aiLoading = true;
+    aiThread = []; // 重新解析：上一轮追问作废
+    followUpText = '';
     render();
     try {
       var textarea = document.getElementById('answer');
@@ -657,6 +872,84 @@
       aiText = 'AI 解析失败：' + (error && error.message ? error.message : error);
     } finally {
       aiLoading = false;
+      render();
+    }
+  }
+
+  /**
+   * 追问的 Prompt：把题干、答案、上一轮解析和已有的问答一起带上，
+   * 让模型能接着上下文回答，而不是把整段解析再讲一遍。
+   */
+  function buildFollowUpPrompt(question) {
+    var q = ctx.question;
+    var options = (q.options || []).map(function (option) {
+      return option.key + '. ' + option.text;
+    }).join('\n');
+
+    var lines = [
+      '你是大学课程答疑老师，正在给一名学生讲解下面这道题。',
+      '',
+      '题目：' + q.question
+    ];
+    if (options) lines.push('', '选项：', options);
+    lines.push('', '正确答案：' + (ctx.correctAnswerText || ''));
+    lines.push('', '你之前给出的解析：', aiText);
+    if (aiThread.length) {
+      lines.push('', '之后的对话：');
+      aiThread.forEach(function (turn) {
+        lines.push((turn.role === 'user' ? '学生：' : '你：') + turn.text);
+      });
+    }
+    lines.push(
+      '',
+      '学生现在追问：' + question,
+      '',
+      '要求：',
+      '- 直接回答这个追问，不要重抄整段解析，也不要重复已经说过的内容；',
+      '- 数学表达式一律用 LaTeX：行内用 $...$，独立公式用 $$...$$，禁止把 \\frac、\\sqrt 等命令裸写在正文里；',
+      '- 公式内不要夹杂中文，需要中文说明时写在公式外面；',
+      '- 不要用 Unicode 符号或纯文本凑合；',
+      '- 输出纯文本，不要 Markdown 标记；',
+      '- 控制在 250 字以内。'
+    );
+    return lines.join('\n');
+  }
+
+  /** 发送一次追问；成功后把问答追加进 [aiThread]。 */
+  async function requestFollowUp() {
+    if (!ctx || !ctx.question || followUpLoading) return;
+
+    var textarea = document.getElementById('followup');
+    if (textarea) followUpText = textarea.value;
+    var question = String(followUpText || '').trim();
+    if (!question) {
+      hostCall('tbankToast', { message: '先写点想问的内容' }).catch(function () {});
+      return;
+    }
+
+    followUpLoading = true;
+    render();
+    try {
+      var images = [];
+      if (ctx.question.imageDataUrl) images.push(ctx.question.imageDataUrl);
+      var result = await hostCall('tbankAiComplete', {
+        prompt: buildFollowUpPrompt(question),
+        images: images
+      });
+      var answer = typeof result === 'string'
+        ? normalizeAiMath(result)
+        : '（AI 没有返回内容）';
+      aiThread.push({ role: 'user', text: question });
+      aiThread.push({ role: 'ai', text: answer });
+    } catch (error) {
+      aiThread.push({ role: 'user', text: question });
+      aiThread.push({
+        role: 'ai',
+        text: '追问失败：' + (error && error.message ? error.message : error)
+      });
+    } finally {
+      followUpText = ''; // 问题已经进对话流，输入框清空
+      followUpLoading = false;
       render();
     }
   }

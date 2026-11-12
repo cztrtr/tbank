@@ -11,7 +11,9 @@ import 'package:webview_windows/webview_windows.dart';
 
 import '../models/question_bank.dart';
 import '../models/question_bank_file.dart';
+import '../services/app_config.dart';
 import '../services/bank_io.dart';
+import '../services/pen_gesture.dart';
 import '../services/plugin_manager.dart';
 import '../services/plugin_schema.dart';
 
@@ -85,10 +87,17 @@ class _PluginPracticeViewState extends State<PluginPracticeView> {
 
   String? _error;
   bool _pageReady = false;
+  StreamSubscription<int>? _penGestureSub;
 
   @override
   void initState() {
     super.initState();
+    // 小米焦点笔 Pro 的 195（双击）等系统手势，转发给当前插件页面。
+    // 页面没加载好时直接丢弃，避免寄存器里堆事件。
+    _penGestureSub = PenGesture.events.listen((int code) {
+      if (!_pageReady) return;
+      _eval('window.__tbankPenGesture($code)');
+    });
     _resolveEntry();
   }
 
@@ -105,6 +114,7 @@ class _PluginPracticeViewState extends State<PluginPracticeView> {
 
   @override
   void dispose() {
+    _penGestureSub?.cancel();
     _windowsMessage?.cancel();
     _windowsLoading?.cancel();
     _windowsController?.dispose();
@@ -263,6 +273,16 @@ class _PluginPracticeViewState extends State<PluginPracticeView> {
           break;
         case 'tbankConfigGet':
           result = await PluginManager.readConfig(widget.pluginId);
+          break;
+        case 'tbankSetPenSettings':
+          // 手写板参数回传：插件改完笔宽 / 橡皮模式 / 网格后存到 App 配置里，
+          // 换题库、换题组都能沿用同一套手感。
+          await AppConfig.savePenSettings(
+            width: (args['width'] as num?)?.toDouble(),
+            eraserMode: args['eraserMode'] as String?,
+            grid: args['grid'] as bool?,
+          );
+          result = true;
           break;
         case 'tbankReadBank':
           final QuestionBankFile? bankFile = widget.bankFile;
@@ -505,6 +525,16 @@ class _PluginPracticeViewState extends State<PluginPracticeView> {
       'mistakeScore': widget.mistakeScore,
       'isMistakeDone': widget.isMistakeDone,
       'aiEnabled': widget.aiEnabled,
+      // 手写笔相关设置：插件读 settings.penDoubleTapMs 调整双击判定窗口，
+      // settings.penOnlyInput 控制手写板是否屏蔽手指落笔；
+      // penWidth / eraserMode / grid 是手写板上次用的参数，换题库也沿用。
+      'settings': <String, dynamic>{
+        'penDoubleTapMs': AppConfig.penDoubleTapMs,
+        'penOnlyInput': AppConfig.penOnlyInput,
+        'penWidth': AppConfig.penScratchWidth,
+        'eraserMode': AppConfig.penEraserMode,
+        'grid': AppConfig.penGrid,
+      },
       'question': <String, dynamic>{
         'id': question.id,
         'type': question.typeId,

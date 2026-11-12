@@ -48,13 +48,18 @@
     return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
   }
 
-  // 笔杆按键收不到时的兜底：笔尖在同一处快速点两下
-  function isPenDoubleTap(previous, current) {
+  // 笔杆按键收不到时的兜底：笔尖在同一处快速点两下。
+  // maxGapMs 由调用方传入（App 设置里的「笔尖双击间隔」），默认 320ms。
+  function isPenDoubleTap(previous, current, maxGapMs) {
     if (!previous || !current) return false;
+    var limit = Number(maxGapMs);
+    if (!isFinite(limit) || limit <= 0) limit = 320;
     var gap = Number(current.t) - Number(previous.t);
-    if (!isFinite(gap) || gap < 0 || gap > 320) return false;
+    if (!isFinite(gap) || gap < 0 || gap > limit) return false;
+    // 间隔越大，允许的落点漂移也该放宽一点，否则慢速双击很难命中。
+    var distanceLimit = Math.max(14, Math.min(28, 14 + (limit - 320) / 20));
     var distance = Math.hypot(current.x - previous.x, current.y - previous.y);
-    return distance <= 14;
+    return distance <= distanceLimit;
   }
 
   function hitStroke(stroke, point, tolerance) {
@@ -83,10 +88,20 @@
       : Math.max(ERASER_MIN, this.penWidth * ERASER_FACTOR);
     this.eraserMode = options.eraserMode === ERASER_MODES.stroke ? ERASER_MODES.stroke : ERASER_MODES.pixel;
     this.grid = options.grid !== false;
+    // 笔尖双击判定间隔，App 设置里可调；0 或非法值退回 320ms。
+    this.doubleTapMs = Number(options.doubleTapMs) > 0 ? Number(options.doubleTapMs) : 320;
+    // 手势回调：手势触发时通知上层切换笔/橡皮，参数为 'toggle'。
+    this.onGesture = typeof options.onGesture === "function" ? options.onGesture : null;
+    // 只认手写笔：开启后手指 / 鼠标触摸都不落笔，只能用笔（或笔的橡皮端）。
+    this.penOnly = options.penOnly === true;
     this.strokes = [];
     this.undoStack = [];
     this.current = null;
     this.activePointerId = null;
+    // 笔尖双击的第一击：只记录时间和位置，不落笔。
+    this.lastPenTap = null;
+    // 笔杆按键 / 橡皮位按下时，后续 move/up 都属于手势，不画。
+    this.gesturePointerId = null;
     // 用笔写字时手掌先落下的那一坨触摸要忽略掉。
     this.penActive = false;
     this.penLastAt = 0;
@@ -135,6 +150,7 @@
     this.tool = tool === TOOLS.eraser ? TOOLS.eraser : TOOLS.pen;
     this.current = null;
     this.activePointerId = null;
+    this.lastPenTap = null;
     if (this.canvas.classList) this.canvas.classList.toggle("is-eraser", this.tool === TOOLS.eraser);
     return this.tool;
   };
@@ -142,6 +158,16 @@
   DrawBoard.prototype.setEraserMode = function (mode) {
     this.eraserMode = mode === ERASER_MODES.stroke ? ERASER_MODES.stroke : ERASER_MODES.pixel;
     return this.eraserMode;
+  };
+
+  // 开关「只认手写笔」。切换时打断当前笔画，避免半截线留在画布上。
+  DrawBoard.prototype.setPenOnly = function (value) {
+    this.penOnly = !!value;
+    this.current = null;
+    this.activePointerId = null;
+    this.gesturePointerId = null;
+    this.lastPenTap = null;
+    return this.penOnly;
   };
 
   DrawBoard.prototype._eraseStrokeAt = function (point) {
@@ -201,7 +227,8 @@
   function pressureOf(event) {
     if (!event || event.pointerType !== "pen") return 0;
     var value = Number(event.pressure);
-    if (!isFinite(value) || value <= 0) return 0;
+    // 部分笔/驱动把不支持压感上报成 0，按中性值兜底，避免笔宽突然掉到最细。
+    if (!isFinite(value) || value <= 0) return 0.5;
     return Math.min(1, Math.max(0.05, value));
   }
 
@@ -211,10 +238,52 @@
     return Math.max(0.8, stroke.width * (0.55 + 0.85 * pressure));
   };
 
+  DrawBoard.prototype.setDoubleTapMs = function (value) {
+    var num = Number(value);
+    if (!isFinite(num) || num <= 0) return this.doubleTapMs;
+    this.doubleTapMs = Math.max(120, Math.min(1200, Math.round(num)));
+    return this.doubleTapMs;
+  };
+
+  DrawBoard.prototype._emitGesture = function () {
+    if (!this.onGesture) return;
+    try {
+      this.onGesture("toggle");
+    } catch (error) {
+      /* 回调异常不影响绘制 */
+    }
+  };
+
   DrawBoard.prototype._onDown = function (event) {
     if (this.current) return;
-    // 笔杆按键（barrel，button 5 / buttons bit 5）、鼠标右键、侧键：交给上层切换工具，不落笔
-    if (event.button === 5 || event.button === 2 || ((event.buttons | 0) & 32) === 32) return;
+
+    var type = event.pointerType || "mouse";
+    // 设置里打开「手写板屏蔽手指」后，只有手写笔（含 Android 14 把
+    // TOOL_TYPE_ERASER 映射成的 'eraser'）能落笔。这里刻意不调用
+    // preventDefault，手指仍然可以拖动页面滚动画布区域。
+    if (this.penOnly && type !== "pen" && type !== "eraser") return;
+
+    // 笔杆按键（barrel，button 5 / buttons bit 5）、鼠标右键、侧键：
+    // 这是「切笔/橡皮」手势，不落笔。
+    if (event.button === 5 || event.button === 2 || ((event.buttons | 0) & 32) === 32) {
+      if (event.pointerId !== undefined) {
+        this.activePointerId = event.pointerId;
+        this.gesturePointerId = event.pointerId;
+        if (this.canvas.setPointerCapture) {
+          try {
+            this.canvas.setPointerCapture(event.pointerId);
+          } catch (error) {
+            /* 忽略 */
+          }
+        }
+      } else {
+        this.gesturePointerId = -1;
+      }
+      this._emitGesture();
+      if (event.preventDefault) event.preventDefault();
+      return;
+    }
+
     if (this.tool === TOOLS.eraser && this.eraserMode === ERASER_MODES.stroke) {
       if (event.pointerId !== undefined) this.activePointerId = event.pointerId;
       if (this.canvas.setPointerCapture) {
@@ -228,7 +297,7 @@
       if (event.preventDefault) event.preventDefault();
       return;
     }
-    var type = event.pointerType || "mouse";
+
     if (type === "mouse" && event.button !== 0) return;
     // 笔正在写的时候，手掌的触摸一律无视
     if (type === "touch" && this.penActive) {
@@ -242,7 +311,21 @@
     if (type === "pen") {
       this.penActive = true;
       this.penLastAt = Date.now();
+
+      // 小米焦点笔 Pro 的双击（以及部分笔杆按键收不到时的兜底）：
+      // 笔尖在同一处快速点两下，命中就切工具、不落笔。
+      var tapPoint = this._point(event);
+      var tap = { x: tapPoint.x, y: tapPoint.y, t: Date.now() };
+      if (isPenDoubleTap(this.lastPenTap, tap, this.doubleTapMs)) {
+        this.lastPenTap = null;
+        this.undoTap(2);
+        this._emitGesture();
+        if (event.preventDefault) event.preventDefault();
+        return;
+      }
+      this.lastPenTap = tap;
     }
+
     if (event.pointerId !== undefined) this.activePointerId = event.pointerId;
     if (this.canvas.setPointerCapture) {
       try {
@@ -251,9 +334,14 @@
         /* 某些 WebView 不支持，忽略 */
       }
     }
+
+    // Android 14+ 的 TOOL_TYPE_ERASER 会映射成 pointerType 'eraser'：
+    // 当前工具不变，这一笔按橡皮落。
+    var forcedEraser = type === "eraser";
+    var useEraser = forcedEraser || this.tool === TOOLS.eraser;
     var stroke = {
-      tool: this.tool,
-      width: this.tool === TOOLS.eraser ? this.eraserWidth : this.penWidth,
+      tool: useEraser ? TOOLS.eraser : TOOLS.pen,
+      width: useEraser ? this.eraserWidth : this.penWidth,
       points: [this._point(event)]
     };
     this.strokes.push(stroke);
@@ -263,6 +351,13 @@
   };
 
   DrawBoard.prototype._onMove = function (event) {
+    // 笔杆按键手势按住期间的所有 move 都吞掉，避免手势滑动时留下墨迹。
+    if (this.gesturePointerId !== null) {
+      if (event.pointerId === undefined || event.pointerId === this.gesturePointerId) {
+        if (event.preventDefault) event.preventDefault();
+        return;
+      }
+    }
     if (this.tool === TOOLS.eraser && this.eraserMode === ERASER_MODES.stroke && !this.current) {
       if (this.activePointerId === null) return;
       if (event.pointerId !== undefined && event.pointerId !== this.activePointerId) return;
@@ -297,6 +392,23 @@
   };
 
   DrawBoard.prototype._onUp = function (event) {
+    if (this.gesturePointerId !== null) {
+      if (event && event.pointerId !== undefined && event.pointerId !== this.gesturePointerId) {
+        return;
+      }
+      this.gesturePointerId = null;
+      this.activePointerId = null;
+      this.lastPenTap = null;
+      if (this.canvas.releasePointerCapture && event && event.pointerId !== undefined) {
+        try {
+          this.canvas.releasePointerCapture(event.pointerId);
+        } catch (error) {
+          /* 忽略 */
+        }
+      }
+      if (event && event.preventDefault) event.preventDefault();
+      return;
+    }
     if (!this.current) {
       if (this.activePointerId !== null && (!event || event.pointerId === undefined || event.pointerId === this.activePointerId)) {
         this.activePointerId = null;

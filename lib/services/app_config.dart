@@ -29,6 +29,23 @@ class AppConfig {
   File? _file; // config.json 的句柄，init() 成功定位后才非空
   bool _loaded = false; // 是否已完成加载，防止重复读文件
   String? _dsApiKey; // 内存中的 DS API Key（明文）；持久化时转 base64 再写入 config.json
+  int _penDoubleTapMs = penDoubleTapDefault; // 笔尖双击切换笔/橡皮的时间窗（毫秒）
+  bool _penOnlyInput = false; // 手写板是否只接受手写笔（屏蔽手指落笔）
+  double _penScratchWidth = penScratchWidthDefault; // 手写板默认笔宽
+  String _penEraserMode = 'pixel'; // 手写板橡皮模式：pixel 精确 / stroke 整笔
+  bool _penGrid = true; // 手写板是否显示网格
+
+  /// 手写板笔宽的默认值与允许范围。
+  static const double penScratchWidthDefault = 3;
+  static const double penScratchWidthMin = 1;
+  static const double penScratchWidthMax = 12;
+
+  /// 笔尖双击间隔的默认值，也是设置页滑块的初始位置。
+  static const int penDoubleTapDefault = 320;
+
+  /// 笔尖双击间隔的允许范围，存储和读取都会夹到这个区间。
+  static const int penDoubleTapMin = 150;
+  static const int penDoubleTapMax = 700;
 
   /// 题库目录的全局实时值：任何页面监听它，目录变化后都会自动重建。
   /// 初始为空，AppConfig.init() 完成后才会填入文件里的数据。
@@ -50,6 +67,22 @@ class AppConfig {
 
   /// DS API Key，全局可读。
   static String? get dsApiKey => _instance._dsApiKey;
+
+  /// 笔尖双击切换笔/橡皮的时间窗（毫秒），插件通过 context.settings 读取。
+  static int get penDoubleTapMs => _instance._penDoubleTapMs;
+
+  /// 手写板是否屏蔽手指：true 时只有手写笔/橡皮端能落笔，
+  /// 手指触摸不画线（仍然可以用手指滚动页面）。
+  static bool get penOnlyInput => _instance._penOnlyInput;
+
+  /// 手写板默认笔宽；插件里调过之后会存下来，换题库 / 换题组继续沿用。
+  static double get penScratchWidth => _instance._penScratchWidth;
+
+  /// 手写板橡皮模式：`pixel` 只挖掉笔迹，`stroke` 整条删除。
+  static String get penEraserMode => _instance._penEraserMode;
+
+  /// 手写板是否显示网格。
+  static bool get penGrid => _instance._penGrid;
 
   /// 启动时调用一次：读配置到内存，没有文件就创建。
   static Future<void> init() => _instance._load();
@@ -144,6 +177,78 @@ class AppConfig {
     await _instance._save(); // 落盘，并在 _syncNotifier 里通知界面
   }
 
+  /// 修改笔尖双击间隔；超出范围会被夹到 150~700ms。
+  static Future<void> setPenDoubleTapMs(int value) async {
+    _instance._penDoubleTapMs =
+        value.clamp(penDoubleTapMin, penDoubleTapMax).toInt();
+    await _instance._save();
+  }
+
+  /// 修改「手写板只认手写笔」开关；下次打开手写区生效。
+  static Future<void> setPenOnlyInput(bool value) async {
+    if (_instance._penOnlyInput == value) return; // 值没变就不写盘
+    _instance._penOnlyInput = value;
+    await _instance._save();
+  }
+
+  /// 修改手写板默认笔宽；超出 1~12 会被夹住。
+  static Future<void> setPenScratchWidth(double value) async {
+    final double next = value
+        .clamp(penScratchWidthMin, penScratchWidthMax)
+        .toDouble();
+    if (_instance._penScratchWidth == next) return;
+    _instance._penScratchWidth = next;
+    await _instance._save();
+  }
+
+  /// 修改手写板橡皮模式；非法值退回 `pixel`。
+  static Future<void> setPenEraserMode(String mode) async {
+    final String next = mode == 'stroke' ? 'stroke' : 'pixel';
+    if (_instance._penEraserMode == next) return;
+    _instance._penEraserMode = next;
+    await _instance._save();
+  }
+
+  /// 修改手写板网格开关。
+  static Future<void> setPenGrid(bool value) async {
+    if (_instance._penGrid == value) return;
+    _instance._penGrid = value;
+    await _instance._save();
+  }
+
+  /// 一次性保存插件传来的手写板设置；缺的字段保持不变。
+  ///
+  /// 插件在改笔宽 / 橡皮模式 / 网格时调用，只写盘一次。
+  static Future<void> savePenSettings({
+    double? width,
+    String? eraserMode,
+    bool? grid,
+  }) async {
+    bool changed = false;
+
+    if (width != null) {
+      final double next = width
+          .clamp(penScratchWidthMin, penScratchWidthMax)
+          .toDouble();
+      if (_instance._penScratchWidth != next) {
+        _instance._penScratchWidth = next;
+        changed = true;
+      }
+    }
+    if (eraserMode != null) {
+      final String next = eraserMode == 'stroke' ? 'stroke' : 'pixel';
+      if (_instance._penEraserMode != next) {
+        _instance._penEraserMode = next;
+        changed = true;
+      }
+    }
+    if (grid != null && _instance._penGrid != grid) {
+      _instance._penGrid = grid;
+      changed = true;
+    }
+    if (changed) await _instance._save();
+  }
+
   /// 把内存里的配置同步到全局可监听值，通知所有监听页面。
   void _syncNotifier() {
     questionBankDirsNotifier.value =
@@ -173,6 +278,24 @@ class AppConfig {
           final lastDate = data['lastClockOnDate'];
           _lastClockOnDate = lastDate is String ? lastDate : ''; // 空表示从未打卡
           _dsApiKey = _decodeApiKey(data['dsApiKey']); // base64 → 明文；无效视为未设置
+          final penDoubleTapMs = data['penDoubleTapMs'];
+          _penDoubleTapMs = penDoubleTapMs is num
+              ? penDoubleTapMs
+                    .toInt()
+                    .clamp(penDoubleTapMin, penDoubleTapMax)
+                    .toInt()
+              : penDoubleTapDefault;
+          _penOnlyInput = data['penOnlyInput'] == true; // 缺失按「不屏蔽」处理
+          final penWidth = data['penScratchWidth'];
+          _penScratchWidth = penWidth is num
+              ? penWidth
+                    .toDouble()
+                    .clamp(penScratchWidthMin, penScratchWidthMax)
+                    .toDouble()
+              : penScratchWidthDefault;
+          _penEraserMode =
+              data['penEraserMode'] == 'stroke' ? 'stroke' : 'pixel';
+          _penGrid = data['penGrid'] != false; // 缺失按「显示网格」处理
         }
       } else {
         // 没有文件：用默认值写一份，此时内存里已经是默认值
@@ -185,6 +308,11 @@ class AppConfig {
       _clockOn = 0;
       _lastClockOnDate = '';
       _dsApiKey = null;
+      _penDoubleTapMs = penDoubleTapDefault;
+      _penOnlyInput = false;
+      _penScratchWidth = penScratchWidthDefault;
+      _penEraserMode = 'pixel';
+      _penGrid = true;
       await _save();
     } finally {
       _loaded = true; // 无论成功失败都标记完成，避免反复重试
@@ -203,6 +331,11 @@ class AppConfig {
         'clockOnNum': _clockOn, // 连续打卡天数
         'lastClockOnDate': _lastClockOnDate, // 上次打卡日期 yyyy-MM-dd
         'dsApiKey': _encodeApiKey(_dsApiKey), // DS API Key（base64 编码后存储）
+        'penDoubleTapMs': _penDoubleTapMs, // 笔尖双击间隔（毫秒）
+        'penOnlyInput': _penOnlyInput, // 手写板是否屏蔽手指
+        'penScratchWidth': _penScratchWidth, // 手写板默认笔宽
+        'penEraserMode': _penEraserMode, // 手写板橡皮模式
+        'penGrid': _penGrid, // 手写板是否显示网格
       });
       await file.writeAsString(content, flush: true); // 覆盖写并刷新到系统
     } catch (error) {
