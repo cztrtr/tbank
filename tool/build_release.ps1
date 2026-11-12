@@ -10,7 +10,7 @@ $versionLine = Get-Content 'pubspec.yaml' |
   Select-Object -First 1
 $version = ($versionLine -replace '^version:\s*', '').Trim()
 $versionName = ($version -split '\+')[0]
-$dest = Join-Path $root 'release'
+$dest = Join-Path (Split-Path -Parent $root) 'release'
 New-Item -ItemType Directory -Force -Path $dest | Out-Null
 
 $targets = @(
