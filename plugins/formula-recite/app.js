@@ -419,7 +419,14 @@
       penWidth: state.penWidth || config.penWidth,
       grid: config.showGrid,
       tool: state.tool === "eraser" ? "eraser" : "pen",
-      eraserMode: state.eraserMode
+      eraserMode: state.eraserMode,
+      doubleTapMs: Number(
+        state.context && state.context.settings &&
+        state.context.settings.penDoubleTapMs
+      ) || 320,
+      // 设置里的「手写板屏蔽手指」：开启后只有笔能落笔。
+      penOnly: !!(state.context && state.context.settings &&
+        state.context.settings.penOnlyInput)
     });
     state.board.mount();
     if (state.draftStrokes.length > 0) {
@@ -1129,13 +1136,32 @@
     handleContext(context);
   };
 
+  // 切笔 / 橡皮的悬浮提示：手写区上方淡入淡出，不打断输入，也不占宿主 SnackBar。
+  var penHintEl = null;
+  var penHintTimer = null;
+
+  function showPenHint(text) {
+    if (!document.body) return;
+    if (!penHintEl) {
+      penHintEl = document.createElement("div");
+      penHintEl.className = "pen-hint";
+      document.body.appendChild(penHintEl);
+    }
+    penHintEl.textContent = text;
+    penHintEl.classList.remove("is-on");
+    void penHintEl.offsetWidth; // 让动画从起点重播
+    penHintEl.classList.add("is-on");
+    if (penHintTimer) clearTimeout(penHintTimer);
+    penHintTimer = setTimeout(function () {
+      penHintEl.classList.remove("is-on");
+    }, 900);
+  }
+
   function toggleToolFromGesture() {
     if (typeof state.applyTool !== "function") return;
     var next = state.tool === "eraser" ? "pen" : "eraser";
     state.applyTool(next);
-    call("tbankToast", {
-      message: next === "eraser" ? "笔杆手势：已切到橡皮" : "笔杆手势：已切回笔"
-    });
+    showPenHint(next === "eraser" ? "橡皮" : "笔");
   }
 
   // 小米焦点笔 Pro 在 Android 里把双击投递为 KeyEvent 195（194 轻捏 / 196 上滑 / 197 下滑），

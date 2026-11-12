@@ -119,19 +119,19 @@ void main() {
 
   test('内置 standard 支持高版本热更新，但仍不可卸载', () async {
     await PluginManager.importZipBytes(
-      _zip(manifest('standard', version: '1.1.0')),
+      _zip(manifest('standard', version: '1.3.1')),
     );
     await PluginManager.importZipBytes(
-      _zip(manifest('standard', version: '1.2.0')),
+      _zip(manifest('standard', version: '1.4.0')),
     );
 
     final PluginManifest? installed = await PluginManager.find('standard');
-    expect(installed?.version, '1.2.0');
+    expect(installed?.version, '1.4.0');
 
     // 同版本或降级不允许覆盖
     await expectLater(
       PluginManager.importZipBytes(
-        _zip(manifest('standard', version: '1.2.0')),
+        _zip(manifest('standard', version: '1.4.0')),
       ),
       throwsA(isA<PluginException>()),
     );
