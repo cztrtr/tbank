@@ -34,6 +34,7 @@ class AppConfig {
   double _penScratchWidth = penScratchWidthDefault; // 手写板默认笔宽
   String _penEraserMode = 'pixel'; // 手写板橡皮模式：pixel 精确 / stroke 整笔
   bool _penGrid = true; // 手写板是否显示网格
+  Set<String> _collapsedManagerGroups = <String>{}; // 管理页折叠的分组 key
 
   /// 手写板笔宽的默认值与允许范围。
   static const double penScratchWidthDefault = 3;
@@ -52,14 +53,14 @@ class AppConfig {
   static final ValueNotifier<List<String>> questionBankDirsNotifier =
       ValueNotifier<List<String>>(const <String>[]);
 
-  static final ValueNotifier<int> clockOnNotifier =
-      ValueNotifier<int>(0);
+  static final ValueNotifier<int> clockOnNotifier = ValueNotifier<int>(0);
 
   /// DS API Key 的全局实时值；设置后监听它的页面会自动刷新。
   ///
   /// 这里存的是明文，只有在 config.json 里才以 base64 形式保存。
-  static final ValueNotifier<String?> dsApiKeyNotifier =
-      ValueNotifier<String?>(null);
+  static final ValueNotifier<String?> dsApiKeyNotifier = ValueNotifier<String?>(
+    null,
+  );
 
   /// 今天是否已经打过卡。
   static bool get hasCheckedInToday =>
@@ -84,6 +85,16 @@ class AppConfig {
   /// 手写板是否显示网格。
   static bool get penGrid => _instance._penGrid;
 
+  /// 管理页已折叠的分组 key（父文件夹/目录/子目录）。
+  static Set<String> get collapsedManagerGroups =>
+      Set<String>.unmodifiable(_instance._collapsedManagerGroups);
+
+  /// 保存管理页折叠状态；key 由页面按层级生成。
+  static Future<void> setCollapsedManagerGroups(Iterable<String> groups) async {
+    _instance._collapsedManagerGroups = groups.toSet();
+    await _instance._save();
+  }
+
   /// 启动时调用一次：读配置到内存，没有文件就创建。
   static Future<void> init() => _instance._load();
 
@@ -103,7 +114,8 @@ class AppConfig {
     }
 
     final nextCount = _instance._lastClockOnDate == _yesterdayString()
-        ? _instance._clockOn + 1 // 连续打卡
+        ? _instance._clockOn +
+              1 // 连续打卡
         : 1; // 断签或第一次打卡
 
     // 先改内存再落盘；await 之前已经更新日期，
@@ -164,7 +176,9 @@ class AppConfig {
 
   /// 删除一个题库目录，不存在则忽略；成功后立即写入文件。
   static Future<void> removeQuestionBankDir(String path) async {
-    if (!_instance._questionBankDirs.remove(path)) return; // remove 返回 false 说明本来就没有
+    if (!_instance._questionBankDirs.remove(path)) {
+      return; // remove 返回 false 说明本来就没有
+    }
     await _instance._save();
   }
 
@@ -172,15 +186,17 @@ class AppConfig {
   ///
   /// 传 null 或空串表示清除。
   static Future<void> setDsApiKey(String? value) async {
-    _instance._dsApiKey =
-        (value == null || value.trim().isEmpty) ? null : value.trim();
+    _instance._dsApiKey = (value == null || value.trim().isEmpty)
+        ? null
+        : value.trim();
     await _instance._save(); // 落盘，并在 _syncNotifier 里通知界面
   }
 
   /// 修改笔尖双击间隔；超出范围会被夹到 150~700ms。
   static Future<void> setPenDoubleTapMs(int value) async {
-    _instance._penDoubleTapMs =
-        value.clamp(penDoubleTapMin, penDoubleTapMax).toInt();
+    _instance._penDoubleTapMs = value
+        .clamp(penDoubleTapMin, penDoubleTapMax)
+        .toInt();
     await _instance._save();
   }
 
@@ -251,8 +267,9 @@ class AppConfig {
 
   /// 把内存里的配置同步到全局可监听值，通知所有监听页面。
   void _syncNotifier() {
-    questionBankDirsNotifier.value =
-        List<String>.unmodifiable(_questionBankDirs);
+    questionBankDirsNotifier.value = List<String>.unmodifiable(
+      _questionBankDirs,
+    );
     clockOnNotifier.value = _clockOn;
     dsApiKeyNotifier.value = _dsApiKey; // 通知所有页面刷新 DS API Key
   }
@@ -264,15 +281,20 @@ class AppConfig {
     try {
       final dir = await getApplicationSupportDirectory(); // App 私有目录，无需存储权限
       await dir.create(recursive: true); // 目录不存在时递归创建，已存在不报错
-      _file = File('${dir.path}${Platform.pathSeparator}$_fileName'); // 拼出 config.json 的完整路径
+      _file = File(
+        '${dir.path}${Platform.pathSeparator}$_fileName',
+      ); // 拼出 config.json 的完整路径
 
       if (await _file!.exists()) {
         // 已有文件：读取并解析
-        final data = jsonDecode(await _file!.readAsString()); // 内容不是合法 JSON 会抛异常
+        final data = jsonDecode(
+          await _file!.readAsString(),
+        ); // 内容不是合法 JSON 会抛异常
         if (data is Map<String, dynamic>) {
           final dirs = data['questionBankDirs'];
-          _questionBankDirs =
-              dirs is List ? dirs.whereType<String>().toList() : <String>[]; // 只收集字符串项，忽略脏数据
+          _questionBankDirs = dirs is List
+              ? dirs.whereType<String>().toList()
+              : <String>[]; // 只收集字符串项，忽略脏数据
           final clockOn = data['clockOnNum'];
           _clockOn = clockOn is num ? clockOn.toInt() : 0; // 缺失或类型不对就用默认值
           final lastDate = data['lastClockOnDate'];
@@ -293,9 +315,14 @@ class AppConfig {
                     .clamp(penScratchWidthMin, penScratchWidthMax)
                     .toDouble()
               : penScratchWidthDefault;
-          _penEraserMode =
-              data['penEraserMode'] == 'stroke' ? 'stroke' : 'pixel';
+          _penEraserMode = data['penEraserMode'] == 'stroke'
+              ? 'stroke'
+              : 'pixel';
           _penGrid = data['penGrid'] != false; // 缺失按「显示网格」处理
+          final collapsedGroups = data['collapsedManagerGroups'];
+          _collapsedManagerGroups = collapsedGroups is List
+              ? collapsedGroups.whereType<String>().toSet()
+              : <String>{};
         }
       } else {
         // 没有文件：用默认值写一份，此时内存里已经是默认值
@@ -313,6 +340,7 @@ class AppConfig {
       _penScratchWidth = penScratchWidthDefault;
       _penEraserMode = 'pixel';
       _penGrid = true;
+      _collapsedManagerGroups = <String>{};
       await _save();
     } finally {
       _loaded = true; // 无论成功失败都标记完成，避免反复重试
@@ -326,17 +354,19 @@ class AppConfig {
     if (file == null) return; // 还没定位到文件（例如 init 失败）时无法保存
 
     try {
-      final content = const JsonEncoder.withIndent('  ').convert(<String, dynamic>{
-        'questionBankDirs': _questionBankDirs, // 题库目录列表，顺序保持一致
-        'clockOnNum': _clockOn, // 连续打卡天数
-        'lastClockOnDate': _lastClockOnDate, // 上次打卡日期 yyyy-MM-dd
-        'dsApiKey': _encodeApiKey(_dsApiKey), // DS API Key（base64 编码后存储）
-        'penDoubleTapMs': _penDoubleTapMs, // 笔尖双击间隔（毫秒）
-        'penOnlyInput': _penOnlyInput, // 手写板是否屏蔽手指
-        'penScratchWidth': _penScratchWidth, // 手写板默认笔宽
-        'penEraserMode': _penEraserMode, // 手写板橡皮模式
-        'penGrid': _penGrid, // 手写板是否显示网格
-      });
+      final content = const JsonEncoder.withIndent('  ')
+          .convert(<String, dynamic>{
+            'questionBankDirs': _questionBankDirs, // 题库目录列表，顺序保持一致
+            'clockOnNum': _clockOn, // 连续打卡天数
+            'lastClockOnDate': _lastClockOnDate, // 上次打卡日期 yyyy-MM-dd
+            'dsApiKey': _encodeApiKey(_dsApiKey), // DS API Key（base64 编码后存储）
+            'penDoubleTapMs': _penDoubleTapMs, // 笔尖双击间隔（毫秒）
+            'penOnlyInput': _penOnlyInput, // 手写板是否屏蔽手指
+            'penScratchWidth': _penScratchWidth, // 手写板默认笔宽
+            'penEraserMode': _penEraserMode, // 手写板橡皮模式
+            'penGrid': _penGrid, // 手写板是否显示网格
+            'collapsedManagerGroups': _collapsedManagerGroups.toList()..sort(),
+          });
       await file.writeAsString(content, flush: true); // 覆盖写并刷新到系统
     } catch (error) {
       debugPrint('保存配置失败：$error'); // 写失败只记日志，不影响界面继续使用

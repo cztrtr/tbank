@@ -296,14 +296,9 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
           const SizedBox(height: 6),
           Text(
-            '笔尖双击切换笔 / 橡皮的时间窗，平板手写笔和数位板通用。'
-            '小米焦点触控笔 Pro 的系统级双击由原生手势接管，不受这里影响。',
-            style: TextStyle(
-              fontSize: 12,
-              height: 1.5,
-              color: colorScheme.onSurfaceVariant,
-            ),
-          ),          const SizedBox(height: 6),
+            '笔尖双击切换间隔',
+            style: textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
+          ),
           Row(
             children: <Widget>[
               Expanded(
@@ -336,6 +331,16 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
             ],
           ),
+          Text(
+            '滑块控制笔尖双击的判定时间窗：在这个时间内连续点两下，会切换笔 / 橡皮。'
+            '时间调大更容易触发双击，但也可能把两次正常落笔误判成双击；调小则相反。'
+            '平板手写笔和数位板通用；小米焦点触控笔 Pro 的系统级双击由原生手势接管，不受这里影响。',
+            style: TextStyle(
+              fontSize: 12,
+              height: 1.5,
+              color: colorScheme.onSurfaceVariant,
+            ),
+          ),
 
           const SizedBox(height: 8),
           SwitchListTile(
@@ -343,9 +348,7 @@ class _SettingsPageState extends State<SettingsPage> {
             value: _penOnlyInput,
             title: const Text('手写板屏蔽手指'),
             subtitle: Text(
-              _penOnlyInput
-                  ? '只有手写笔能落笔，手指触摸不画线（仍可滚动页面）'
-                  : '手指和手写笔都能落笔',
+              _penOnlyInput ? '只有手写笔能落笔，手指触摸不画线（仍可滚动页面）' : '手指和手写笔都能落笔',
               style: const TextStyle(fontSize: 12, height: 1.4),
             ),
             onChanged: (bool value) {

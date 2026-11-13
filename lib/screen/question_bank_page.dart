@@ -52,6 +52,9 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
   /// 「AI 出题」一组，而不是在界面上露出英文目录名。
   String _aiRootPath = '';
 
+  /// 管理页当前折叠的分组 key；从 AppConfig 恢复，点击标题时写回。
+  Set<String> _collapsedGroups = <String>{};
+
   /// 按关键词过滤后的题库列表；关键词为空时返回全部。
   List<QuestionBankFile> get _filteredFiles {
     final String query = _query.trim().toLowerCase();
@@ -69,6 +72,7 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
     super.initState();
     // 目录增删后自动重新扫描
     AppConfig.questionBankDirsNotifier.addListener(_onDirsChanged);
+    _collapsedGroups = AppConfig.collapsedManagerGroups.toSet();
 
     // 启动先扫一次；SAF 授权失效的目录会进入错误提示
     unawaited(_scanFiles());
@@ -117,8 +121,9 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
 
     // 并发列目录、合并内置 AI 题库、按 uri 去重都收敛在 BankRepository 里，
     // 这里只负责把结果落到界面。refresh 保证用户刚加的目录立即可见。
-    final BankScanResult result =
-        await BankRepository.instance.listAll(refresh: true);
+    final BankScanResult result = await BankRepository.instance.listAll(
+      refresh: true,
+    );
 
     // 页面已销毁，或已经开始了更新的扫描：丢弃这次结果
     if (!mounted || generation != _scanGeneration) return;
@@ -205,9 +210,7 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
   /// 返回后重新扫描，题数、文件修改时间都会刷新。
   Future<void> _openEditor(QuestionBankFile file) async {
     await Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => AiBankEditorPage(file: file),
-      ),
+      MaterialPageRoute<void>(builder: (_) => AiBankEditorPage(file: file)),
     );
     if (!mounted) return;
     unawaited(_scanFiles());
@@ -435,6 +438,69 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
     return '';
   }
 
+  /// 搜索时强制展开，保证匹配结果不会被旧的折叠状态藏起来。
+  bool _isGroupCollapsed(String key) {
+    if (_query.trim().isNotEmpty) return false;
+    return _collapsedGroups.contains(key);
+  }
+
+  void _toggleGroup(String key) {
+    setState(() {
+      if (!_collapsedGroups.remove(key)) _collapsedGroups.add(key);
+    });
+    unawaited(AppConfig.setCollapsedManagerGroups(_collapsedGroups));
+  }
+
+  /// 可折叠的分组标题：左侧箭头 + 图标 + 文本，可选尾部操作按钮。
+  Widget _buildCollapsibleHeader({
+    required String groupKey,
+    required IconData icon,
+    required String label,
+    required ColorScheme colorScheme,
+    required double left,
+    required double fontSize,
+    required FontWeight fontWeight,
+    Color? iconColor,
+    Color? textColor,
+    Widget? trailing,
+  }) {
+    final bool collapsed = _isGroupCollapsed(groupKey);
+    return Material(
+      type: MaterialType.transparency,
+      child: InkWell(
+        onTap: () => _toggleGroup(groupKey),
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(left, 8, 0, 2),
+          child: Row(
+            children: <Widget>[
+              Icon(
+                collapsed ? Icons.chevron_right : Icons.expand_more,
+                size: 20,
+                color: colorScheme.onSurfaceVariant,
+              ),
+              const SizedBox(width: 2),
+              Icon(icon, size: fontSize + 5, color: iconColor),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: fontSize,
+                    fontWeight: fontWeight,
+                    color: textColor ?? colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+              ?trailing,
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   /// 把扫描结果按「父文件夹 → 添加的文件夹 → 子目录 → 题库」渲染。
   ///
   /// 父文件夹是每个目录引用的上一层（见 [BankIo.parentOf]）：
@@ -483,66 +549,41 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
     for (final MapEntry<String, Map<String, List<QuestionBankFile>>> parent
         in tree.entries) {
       final bool isVirtual = virtualParents.contains(parent.key);
+      final String parentGroupKey = 'p:${parent.key}';
       children.add(
-        Padding(
-          padding: const EdgeInsets.fromLTRB(0, 16, 0, 2),
-          child: Row(
-            children: <Widget>[
-              Icon(
-                Icons.folder_open_outlined,
-                size: 20,
-                color: colorScheme.primary,
-              ),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  parentLabels[parent.key]!,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w700,
-                    color: colorScheme.onSurface,
-                  ),
-                ),
-              ),
-            ],
-          ),
+        _buildCollapsibleHeader(
+          groupKey: parentGroupKey,
+          icon: Icons.folder_open_outlined,
+          label: parentLabels[parent.key]!,
+          colorScheme: colorScheme,
+          left: 0,
+          fontSize: 15,
+          fontWeight: FontWeight.w700,
+          iconColor: colorScheme.primary,
+          textColor: colorScheme.onSurface,
         ),
       );
+      if (_isGroupCollapsed(parentGroupKey)) continue;
 
       for (final MapEntry<String, List<QuestionBankFile>> child
           in parent.value.entries) {
         final List<QuestionBankFile> files = child.value;
+        final String childGroupKey = 'd:${child.key}';
 
         // 子文件夹标题：没有父级时省略，避免和父标题重复
         if (!isVirtual) {
           children.add(
-            Padding(
-              padding: const EdgeInsets.fromLTRB(14, 10, 0, 2),
-              child: Row(
-                children: <Widget>[
-                  Icon(
-                    Icons.folder_outlined,
-                    size: 18,
-                    color: colorScheme.onSurfaceVariant,
-                  ),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      BankIo.displayNameOf(child.key),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                        color: colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ),
-                  // AI 出题目录不在 config.json 里，没有「移除」这回事
-                  if (_aiGroupKeyOf(files.first).isEmpty)
-                    IconButton(
+            _buildCollapsibleHeader(
+              groupKey: childGroupKey,
+              icon: Icons.folder_outlined,
+              label: BankIo.displayNameOf(child.key),
+              colorScheme: colorScheme,
+              left: 14,
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              iconColor: colorScheme.onSurfaceVariant,
+              trailing: _aiGroupKeyOf(files.first).isEmpty
+                  ? IconButton(
                       tooltip: '移除该题库目录',
                       // 只删配置记录和目录授权，不删磁盘上的文件
                       onPressed: () => _removeDirectoryFor(files.first),
@@ -551,11 +592,11 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
                         size: 20,
                         color: colorScheme.error,
                       ),
-                    ),
-                ],
-              ),
+                    )
+                  : null,
             ),
           );
+          if (_isGroupCollapsed(childGroupKey)) continue;
         }
 
         // 根目录文件排最前，递归到的一层子目录各成一组、按名称排序
@@ -567,53 +608,33 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
               .add(file);
         }
 
-        final List<String> subDirectories =
-            bySubDirectory.keys.toList()
-              ..sort((String a, String b) {
-                if (a.isEmpty) return b.isEmpty ? 0 : -1;
-                if (b.isEmpty) return 1;
-                return a.toLowerCase().compareTo(b.toLowerCase());
-              });
+        final List<String> subDirectories = bySubDirectory.keys.toList()
+          ..sort((String a, String b) {
+            if (a.isEmpty) return b.isEmpty ? 0 : -1;
+            if (b.isEmpty) return 1;
+            return a.toLowerCase().compareTo(b.toLowerCase());
+          });
 
         for (final String subDirectory in subDirectories) {
+          final String subGroupKey = 's:${child.key}#$subDirectory';
           // 子目录标题：例如「组织学」下面的「1_组织学绪论」
           if (subDirectory.isNotEmpty) {
             children.add(
-              Padding(
-                padding: EdgeInsets.fromLTRB(
-                  isVirtual ? 14 : 28,
-                  8,
-                  0,
-                  2,
-                ),
-                child: Row(
-                  children: <Widget>[
-                    Icon(
-                      Icons.folder_outlined,
-                      size: 16,
-                      color: colorScheme.onSurfaceVariant,
-                    ),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        subDirectory,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
+              _buildCollapsibleHeader(
+                groupKey: subGroupKey,
+                icon: Icons.folder_outlined,
+                label: subDirectory,
+                colorScheme: colorScheme,
+                left: isVirtual ? 14 : 28,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                iconColor: colorScheme.onSurfaceVariant,
               ),
             );
+            if (_isGroupCollapsed(subGroupKey)) continue;
           }
 
-          for (final QuestionBankFile file
-              in bySubDirectory[subDirectory]!) {
+          for (final QuestionBankFile file in bySubDirectory[subDirectory]!) {
             children.add(
               Padding(
                 padding: EdgeInsets.only(
