@@ -1,4 +1,5 @@
 import 'dart:async'; // unawaited
+import 'dart:convert'; // jsonDecode：读取题库统计
 import 'dart:io'; // Directory：定位 AI 出题目录
 
 import 'package:file_picker/file_picker.dart'; // 桌面端的目录选择器
@@ -54,6 +55,10 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
 
   /// 管理页当前折叠的分组 key；从 AppConfig 恢复，点击标题时写回。
   Set<String> _collapsedGroups = <String>{};
+
+  /// 每个题库文件的练习统计；按 uri 缓存，扫描后并发读取。
+  Map<String, _BankStat> _bankStats = <String, _BankStat>{};
+  bool _statsLoading = false;
 
   /// 按关键词过滤后的题库列表；关键词为空时返回全部。
   List<QuestionBankFile> get _filteredFiles {
@@ -132,6 +137,53 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
       _files = result.files;
       _scanError = result.errors.isEmpty ? null : result.errors.join('\n');
       _isScanning = false;
+      _bankStats = <String, _BankStat>{};
+      _statsLoading = true;
+    });
+    unawaited(_loadBankStats(result.files, generation));
+  }
+
+  /// 汇总每个题库文件里的 stats，供列表显示练习次数 / 正确率。
+  Future<void> _loadBankStats(
+    List<QuestionBankFile> files,
+    int generation,
+  ) async {
+    final Map<String, _BankStat> loaded = <String, _BankStat>{};
+    await Future.wait(
+      files.map((QuestionBankFile file) async {
+        try {
+          final dynamic decoded = jsonDecode(await BankIo.readText(file.uri));
+          if (decoded is! Map || decoded['questions'] is! List) return;
+          int questionCount = 0;
+          int attemptCount = 0;
+          int wrongCount = 0;
+          for (final dynamic item in decoded['questions'] as List) {
+            if (item is! Map) continue;
+            questionCount += 1;
+            final dynamic stats = item['stats'];
+            if (stats is! Map) continue;
+            attemptCount += stats['attemptCount'] is num
+                ? (stats['attemptCount'] as num).toInt()
+                : 0;
+            wrongCount += stats['wrongCount'] is num
+                ? (stats['wrongCount'] as num).toInt()
+                : 0;
+          }
+          loaded[file.uri] = _BankStat(
+            questionCount: questionCount,
+            attemptCount: attemptCount,
+            wrongCount: wrongCount,
+          );
+        } catch (error) {
+          debugPrint('读取题库统计失败：${file.uri} $error');
+        }
+      }),
+    );
+
+    if (!mounted || generation != _scanGeneration) return;
+    setState(() {
+      _bankStats = loaded;
+      _statsLoading = false;
     });
   }
 
@@ -438,6 +490,18 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
     return '';
   }
 
+  /// 题库按钮下方的一行统计。
+  String _bankStatText(QuestionBankFile file) {
+    final _BankStat? stat = _bankStats[file.uri];
+    if (stat == null) {
+      return _statsLoading ? '练习统计加载中…' : '练习 0 次 / 正确率 —';
+    }
+    final String accuracy = stat.accuracy == null
+        ? '—'
+        : '${(stat.accuracy! * 100).toStringAsFixed(1)}%';
+    return '练习 ${stat.attemptCount} 次 / 正确率 $accuracy';
+  }
+
   /// 搜索时强制展开，保证匹配结果不会被旧的折叠状态藏起来。
   bool _isGroupCollapsed(String key) {
     if (_query.trim().isNotEmpty) return false;
@@ -650,16 +714,32 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
                         // 把选中的题库交给父页面；MainScreen 会切到练习页
                         onPressed: () => widget.onOpenBank(file),
                         icon: const Icon(Icons.description_outlined),
-                        label: Text(
-                          file.displayName, // 只显示最终文件名，不带子目录
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+                        label: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: <Widget>[
+                            Text(
+                              file.displayName, // 只显示最终文件名，不带子目录
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              _bankStatText(file),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ],
                         ),
                         style: OutlinedButton.styleFrom(
                           alignment: Alignment.centerLeft,
                           padding: const EdgeInsets.symmetric(
                             horizontal: 16,
-                            vertical: 14,
+                            vertical: 12,
                           ),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(12),
@@ -701,4 +781,20 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
 
     return children;
   }
+}
+
+/// 单个题库文件的汇总统计。
+class _BankStat {
+  const _BankStat({
+    required this.questionCount,
+    required this.attemptCount,
+    required this.wrongCount,
+  });
+
+  final int questionCount;
+  final int attemptCount;
+  final int wrongCount;
+
+  double? get accuracy =>
+      attemptCount == 0 ? null : 1 - wrongCount / attemptCount;
 }

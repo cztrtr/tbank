@@ -13,6 +13,8 @@ import '../models/question_bank_file.dart';
 import '../services/app_config.dart';
 import '../services/bank_io.dart';
 import '../services/ds_api_exception.dart';
+import '../services/practice_progress.dart';
+import '../services/question_bank_storage.dart';
 import '../services/question_editor_ai.dart';
 import '../widgets/math_text.dart';
 
@@ -43,10 +45,9 @@ class _AiBankEditorPageState extends State<AiBankEditorPage> {
   /// AI 动作进行中的提示文本；null 表示空闲。
   String? _aiBusy;
 
-  String get _topic =>
-      (widget.file.directoryName ?? '').trim().isEmpty
-          ? widget.file.displayName
-          : widget.file.directoryName!;
+  String get _topic => (widget.file.directoryName ?? '').trim().isEmpty
+      ? widget.file.displayName
+      : widget.file.directoryName!;
 
   @override
   void initState() {
@@ -90,6 +91,11 @@ class _AiBankEditorPageState extends State<AiBankEditorPage> {
         ),
       );
       await BankIo.writeText(widget.file.uri, text);
+      // 编辑器改了源文件：作废旧练习副本，并清掉可能已经对不上新题干的断点。
+      await QuestionBankStorage.invalidateForFile(widget.file);
+      await PracticeProgress.clear(widget.file);
+      QuestionBankStorage.sourceChangedNotifier.value = null;
+      QuestionBankStorage.sourceChangedNotifier.value = widget.file.uri;
       return true;
     } catch (error) {
       if (mounted) _toast('保存失败：$error');
@@ -128,10 +134,8 @@ class _AiBankEditorPageState extends State<AiBankEditorPage> {
           context: context,
           isScrollControlled: true,
           useSafeArea: true,
-          builder: (BuildContext sheetContext) => _QuestionEditorSheet(
-            initial: origin,
-            index: index,
-          ),
+          builder: (BuildContext sheetContext) =>
+              _QuestionEditorSheet(initial: origin, index: index),
         );
     if (!mounted || result == null) return;
 
@@ -169,14 +173,10 @@ class _AiBankEditorPageState extends State<AiBankEditorPage> {
   /// - 编辑表单返回的 [QuestionOption] 列表；
   /// - AI 返回的题目 JSON（options 是 `[{key, text}]` 的 map 列表）。
   /// 所以这里统一按「宽松解析」处理，不做泛型强转。
-  Question _buildQuestion(
-    Question? origin,
-    Map<String, dynamic> data,
-  ) {
-    final String typeId =
-        (data['type'] as String?)?.trim().isNotEmpty == true
-            ? data['type'] as String
-            : QuestionType.fillBlank.value;
+  Question _buildQuestion(Question? origin, Map<String, dynamic> data) {
+    final String typeId = (data['type'] as String?)?.trim().isNotEmpty == true
+        ? data['type'] as String
+        : QuestionType.fillBlank.value;
 
     return Question(
       id: origin?.id ?? _nextQuestionId(),
@@ -326,7 +326,8 @@ class _AiBankEditorPageState extends State<AiBankEditorPage> {
     for (final int index in ordered) {
       if (!mounted) return;
       setState(() {
-        _aiBusy = '${fix ? '纠正错误' : '重新出题'}：'
+        _aiBusy =
+            '${fix ? '纠正错误' : '重新出题'}：'
             '${done + 1} / ${ordered.length}';
       });
 
@@ -364,11 +365,7 @@ class _AiBankEditorPageState extends State<AiBankEditorPage> {
       _selected.clear();
     });
     if (saved) {
-      _toast(
-        failed == 0
-            ? '已完成 $done 道题'
-            : '完成 $done 道，其中 $failed 道失败',
-      );
+      _toast(failed == 0 ? '已完成 $done 道题' : '完成 $done 道，其中 $failed 道失败');
     }
   }
 
@@ -555,15 +552,9 @@ class _AiBankEditorPageState extends State<AiBankEditorPage> {
                         _TypeChip(typeId: question.typeId),
                         const SizedBox(width: 6),
                         if (!question.hasAnalysis)
-                          _HintChip(
-                            text: '无解析',
-                            color: colors.error,
-                          ),
+                          _HintChip(text: '无解析', color: colors.error),
                         if (question.correctAnswers.isEmpty)
-                          _HintChip(
-                            text: '缺答案',
-                            color: colors.error,
-                          ),
+                          _HintChip(text: '缺答案', color: colors.error),
                       ],
                     ),
                     const SizedBox(height: 4),
@@ -642,9 +633,7 @@ class _AiBankEditorPageState extends State<AiBankEditorPage> {
           children: <Widget>[
             Expanded(
               child: OutlinedButton.icon(
-                onPressed: idle
-                    ? null
-                    : () => _startAi(_selected, fix: false),
+                onPressed: idle ? null : () => _startAi(_selected, fix: false),
                 icon: const Icon(Icons.refresh, size: 18),
                 label: const Text('重新出题'),
               ),
@@ -767,9 +756,7 @@ class _GuidanceDialogState extends State<_GuidanceDialog> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           Text(
-            fix
-                ? 'AI 会核对这道题的答案和解析。想重点看哪一块？'
-                : 'AI 会围绕同一个知识点换一道新题。想朝哪个方向出？',
+            fix ? 'AI 会核对这道题的答案和解析。想重点看哪一块？' : 'AI 会围绕同一个知识点换一道新题。想朝哪个方向出？',
             style: const TextStyle(fontSize: 13, height: 1.5),
           ),
           if (widget.count > 1) ...<Widget>[
@@ -973,9 +960,8 @@ class _QuestionEditorSheetState extends State<_QuestionEditorSheet> {
       final String text = _optionTexts[i].text.trim();
       if (key.isEmpty && text.isEmpty) continue; // 空行直接忽略
       if (key.isEmpty || text.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('第 ${i + 1} 个选项的标识和内容都要填')),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('第 ${i + 1} 个选项的标识和内容都要填')));
         return;
       }
       options.add(QuestionOption(key: key, text: text));
@@ -984,32 +970,25 @@ class _QuestionEditorSheetState extends State<_QuestionEditorSheet> {
     final List<String> answers;
     if (_isChoice) {
       if (options.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('选择题至少要有一个选项')),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('选择题至少要有一个选项')));
         return;
       }
       if (_answerKeys.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('请点选正确答案')),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('请点选正确答案')));
         return;
       }
       if (!_isMultiple && _answerKeys.length > 1) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('单选 / 判断只能有一个正确答案')),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('单选 / 判断只能有一个正确答案')));
         return;
       }
-      final Set<String> keys =
-          options.map((QuestionOption o) => o.key).toSet();
-      answers = _answerKeys
-          .where((String key) => keys.contains(key))
-          .toList();
+      final Set<String> keys = options.map((QuestionOption o) => o.key).toSet();
+      answers = _answerKeys.where((String key) => keys.contains(key)).toList();
       if (answers.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('答案没有落在选项里')),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('答案没有落在选项里')));
         return;
       }
     } else {
@@ -1019,9 +998,8 @@ class _QuestionEditorSheetState extends State<_QuestionEditorSheet> {
           .where((String line) => line.isNotEmpty)
           .toList();
       if (answers.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('请填写参考答案')),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('请填写参考答案')));
         return;
       }
     }
@@ -1043,9 +1021,7 @@ class _QuestionEditorSheetState extends State<_QuestionEditorSheet> {
         : '编辑第 ${widget.index! + 1} 题';
 
     return Padding(
-      padding: EdgeInsets.only(
-        bottom: MediaQuery.viewInsetsOf(context).bottom,
-      ),
+      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
       child: DraggableScrollableSheet(
         initialChildSize: 0.9,
         minChildSize: 0.5,
@@ -1098,9 +1074,9 @@ class _QuestionEditorSheetState extends State<_QuestionEditorSheet> {
                             child: Text(type.label),
                           ),
                         // 插件自定义题型：只展示，不改
-                        if (!_standardTypes
-                            .any((({String id, String label}) t) =>
-                                t.id == _typeId))
+                        if (!_standardTypes.any(
+                          (({String id, String label}) t) => t.id == _typeId,
+                        ))
                           DropdownMenuItem<String>(
                             value: _typeId,
                             child: Text('$_typeId（插件题型）'),
@@ -1200,8 +1176,7 @@ class _QuestionEditorSheetState extends State<_QuestionEditorSheet> {
                               FilterChip(
                                 label: Text(key.text.trim()),
                                 selected: _answerKeys.contains(key.text.trim()),
-                                onSelected: (_) =>
-                                    _pickAnswer(key.text.trim()),
+                                onSelected: (_) => _pickAnswer(key.text.trim()),
                               ),
                         ],
                       ),

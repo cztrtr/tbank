@@ -5,6 +5,7 @@ import '../services/ai_question_generator.dart';
 import '../services/bank_io.dart';
 import '../services/ds_api_service.dart';
 import '../services/plugin_manager.dart';
+import '../services/question_quality.dart';
 import 'ai_bank_editor_page.dart';
 import 'plugin_type_selector.dart';
 import 'practice_page.dart';
@@ -34,6 +35,7 @@ class _AiGeneratePageState extends State<AiGeneratePage> {
   final Set<String> _selectedTypes = <String>{};
 
   bool _generating = false;
+  QuestionQualityReport? _quality;
   String? _error;
 
   /// 一次生成的目标题目数量（每本上限 25 道，超出会分成多本）。
@@ -139,6 +141,7 @@ class _AiGeneratePageState extends State<AiGeneratePage> {
       _generating = true;
       _error = null;
       _progress = null;
+      _quality = null;
     });
 
     try {
@@ -156,6 +159,7 @@ class _AiGeneratePageState extends State<AiGeneratePage> {
           if (!mounted) return;
           setState(() => _progress = (finished: finished, total: total));
         },
+        onQuality: (QuestionQualityReport report) => _quality = report,
       );
       if (!mounted) return;
 
@@ -163,7 +167,11 @@ class _AiGeneratePageState extends State<AiGeneratePage> {
         0,
         (int sum, AiBankInfo bank) => sum + bank.questionCount,
       );
-      _toast('已生成 $totalQuestions 道题，保存为 ${banks.length} 本');
+      final QuestionQualityReport? quality = _quality;
+      final String qualityText = quality != null && quality.hasIssues
+          ? '；${quality.summary}'
+          : '';
+      _toast('已生成 $totalQuestions 道题，保存为 ${banks.length} 本$qualityText');
       await _loadBanks();
     } on DsApiException catch (error) {
       if (!mounted) return;

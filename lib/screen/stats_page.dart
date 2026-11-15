@@ -6,6 +6,7 @@ import '../models/question_bank_file.dart';
 import '../services/app_config.dart';
 import '../services/bank_io.dart';
 import '../services/bank_repository.dart';
+import '../services/study_history.dart';
 import '../widgets/math_text.dart';
 
 /// 学习统计页。
@@ -26,6 +27,7 @@ class _StatsPageState extends State<StatsPage> {
   bool _loading = true;
   String? _error;
   _StatsData? _data;
+  StudyHistoryData? _history;
 
   @override
   void initState() {
@@ -41,9 +43,11 @@ class _StatsPageState extends State<StatsPage> {
 
     try {
       final _StatsData data = await _computeStats();
+      final StudyHistoryData history = await StudyHistory.load();
       if (!mounted) return;
       setState(() {
         _data = data;
+        _history = history;
         _loading = false;
       });
     } catch (error) {
@@ -58,8 +62,9 @@ class _StatsPageState extends State<StatsPage> {
   /// 扫描所有题库并汇总统计。
   Future<_StatsData> _computeStats() async {
     // 目录扫描与 AI 题库合并统一走 BankRepository（结果已按 uri 去重）
-    final BankScanResult scan =
-        await BankRepository.instance.listAll(refresh: true);
+    final BankScanResult scan = await BankRepository.instance.listAll(
+      refresh: true,
+    );
     final List<QuestionBankFile> files = scan.files;
 
     final Map<String, _GroupStat> groups = <String, _GroupStat>{};
@@ -247,6 +252,14 @@ class _StatsPageState extends State<StatsPage> {
         ),
         const SizedBox(height: 20),
 
+        // ---- 按天学习历史 ----
+        _HistorySection(
+          history: _history ?? StudyHistoryData(const <StudyDay>[]),
+          colorScheme: colorScheme,
+          textTheme: textTheme,
+        ),
+        const SizedBox(height: 20),
+
         // ---- 错得最多的题 ----
         if (data.topWrong.isNotEmpty) ...<Widget>[
           Text(
@@ -409,6 +422,248 @@ class _StatCard extends StatelessWidget {
     );
   }
 }
+
+/// 按天学习历史：今日概览、最近 7 天柱状图、最近 30 天热力图。
+class _HistorySection extends StatelessWidget {
+  const _HistorySection({
+    required this.history,
+    required this.colorScheme,
+    required this.textTheme,
+  });
+
+  final StudyHistoryData history;
+  final ColorScheme colorScheme;
+  final TextTheme textTheme;
+
+  @override
+  Widget build(BuildContext context) {
+    final StudyDay today = history.today;
+    final List<StudyDay> week = history.recentDays(7);
+    final List<StudyDay> month = history.recentDays(30);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Row(
+          children: <Widget>[
+            Text(
+              '学习历史',
+              style: textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const Spacer(),
+            Text(
+              history.isEmpty
+                  ? '从本版开始记录'
+                  : '累计 ${history.totalAttempts} 次 · 答错 ${history.totalWrong} 次',
+              style: TextStyle(
+                fontSize: 11,
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: <Widget>[
+            Expanded(
+              child: _StatCard(
+                label: '今日作答',
+                value: '${today.attempts}',
+                colorScheme: colorScheme,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _StatCard(
+                label: '今日正确率',
+                value: today.accuracy == null
+                    ? '—'
+                    : '${(today.accuracy! * 100).toStringAsFixed(0)}%',
+                colorScheme: colorScheme,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _StatCard(
+                label: '连续学习',
+                value: '${history.currentStreak} 天',
+                colorScheme: colorScheme,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        Text(
+          '最近 7 天',
+          style: textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(height: 8),
+        _HistoryBarChart(days: week, colorScheme: colorScheme),
+        const SizedBox(height: 16),
+        Row(
+          children: <Widget>[
+            Text(
+              '最近 30 天',
+              style: textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const Spacer(),
+            Text(
+              '颜色越深，答题越多',
+              style: TextStyle(
+                fontSize: 11,
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        _HistoryHeatmap(days: month, colorScheme: colorScheme),
+      ],
+    );
+  }
+}
+
+/// 7 天柱状图。
+class _HistoryBarChart extends StatelessWidget {
+  const _HistoryBarChart({required this.days, required this.colorScheme});
+
+  final List<StudyDay> days;
+  final ColorScheme colorScheme;
+
+  @override
+  Widget build(BuildContext context) {
+    int maxAttempts = 0;
+    for (final StudyDay day in days) {
+      if (day.attempts > maxAttempts) maxAttempts = day.attempts;
+    }
+
+    return SizedBox(
+      height: 112,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          for (final StudyDay day in days)
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 3),
+                child: Column(
+                  children: <Widget>[
+                    Text(
+                      day.attempts == 0 ? '' : '${day.attempts}',
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Expanded(
+                      child: Align(
+                        alignment: Alignment.bottomCenter,
+                        child: FractionallySizedBox(
+                          widthFactor: 0.55,
+                          heightFactor: maxAttempts == 0
+                              ? 0.04
+                              : 0.08 + 0.92 * (day.attempts / maxAttempts),
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: day.attempts == 0
+                                  ? colorScheme.surfaceContainerHighest
+                                  : colorScheme.primary,
+                              borderRadius: const BorderRadius.vertical(
+                                top: Radius.circular(4),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      _weekdayLabel(day.date),
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 30 天热力图；每格一天，灰色表示没有作答。
+class _HistoryHeatmap extends StatelessWidget {
+  const _HistoryHeatmap({required this.days, required this.colorScheme});
+
+  final List<StudyDay> days;
+  final ColorScheme colorScheme;
+
+  @override
+  Widget build(BuildContext context) {
+    int maxAttempts = 0;
+    for (final StudyDay day in days) {
+      if (day.attempts > maxAttempts) maxAttempts = day.attempts;
+    }
+
+    return GridView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 10,
+        mainAxisSpacing: 4,
+        crossAxisSpacing: 4,
+        childAspectRatio: 1.2,
+      ),
+      itemCount: days.length,
+      itemBuilder: (BuildContext context, int index) {
+        final StudyDay day = days[index];
+        final double ratio = maxAttempts == 0
+            ? 0
+            : (day.attempts / maxAttempts).clamp(0.0, 1.0);
+        final Color color = day.attempts == 0
+            ? colorScheme.surfaceContainerHighest
+            : (Color.lerp(
+                    colorScheme.primaryContainer,
+                    colorScheme.primary,
+                    0.15 + ratio * 0.85,
+                  ) ??
+                  colorScheme.primary);
+        final String rate = day.accuracy == null
+            ? '无作答'
+            : '正确率 ${(day.accuracy! * 100).toStringAsFixed(0)}%';
+        final String message = '${_monthDay(day.date)}：${day.attempts} 题，$rate';
+
+        return Tooltip(
+          message: message,
+          child: Semantics(
+            label: message,
+            child: Container(
+              decoration: BoxDecoration(
+                color: color,
+                borderRadius: BorderRadius.circular(3),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+String _weekdayLabel(DateTime date) {
+  const List<String> labels = <String>['一', '二', '三', '四', '五', '六', '日'];
+  return labels[(date.weekday - 1).clamp(0, 6)];
+}
+
+String _monthDay(DateTime date) => '${date.month}/${date.day}';
 
 /// 一个题库文件夹的统计。
 class _GroupStat {

@@ -16,6 +16,7 @@ import '../services/mistake_books.dart';
 import '../services/plugin_manager.dart';
 import '../services/practice_progress.dart';
 import '../services/question_bank_storage.dart';
+import '../services/study_history.dart';
 import 'answer_image_picker.dart';
 import 'practice_ai_service.dart';
 import 'practice_controller.dart';
@@ -98,11 +99,21 @@ class _PracticePageState extends State<PracticePage>
     super.initState();
     // 监听前后台切换，用于进入后台时回拷文件
     WidgetsBinding.instance.addObserver(this);
+    QuestionBankStorage.sourceChangedNotifier.addListener(_onBankSourceChanged);
 
     final bank = widget.bank;
     if (bank != null) {
       unawaited(_loadBank(bank));
     }
+  }
+
+  /// 题目编辑器改了当前题库：重新加载，避免继续在旧题干/旧解析上作答。
+  void _onBankSourceChanged() {
+    final String? changedUri = QuestionBankStorage.sourceChangedNotifier.value;
+    final QuestionBankFile? bank = widget.bank;
+    if (!mounted || changedUri == null || bank == null) return;
+    if (changedUri != bank.uri) return;
+    unawaited(_loadBank(bank));
   }
 
   @override
@@ -131,6 +142,9 @@ class _PracticePageState extends State<PracticePage>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    QuestionBankStorage.sourceChangedNotifier.removeListener(
+      _onBankSourceChanged,
+    );
     _answerController.dispose();
 
     // 页面销毁时先保存断点和待写副本，再尝试同步
@@ -281,6 +295,9 @@ class _PracticePageState extends State<PracticePage>
     if (!correct) {
       question.stats.wrongCount += 1; // 只有答错才累计错误数
     }
+
+    // 学习历史按天独立记录，不依赖题库文件是否成功回写。
+    unawaited(StudyHistory.recordAnswer(correct: correct));
 
     // 错题本里的题：答对 -1、答错 +1，减到 0 即完成（题目保留，不移出）
     final int? mistakeScore = question.mistakeScore;

@@ -39,7 +39,7 @@ void main() {
           'question': '题干',
           'options': <dynamic>[],
           'correctAnswer': <String>['answer'],
-          'analysis': '',
+          'analysis': '答案说明',
           'stats': <String, dynamic>{'attemptCount': 0, 'wrongCount': 0},
           if (valid)
             'pluginData': <String, dynamic>{

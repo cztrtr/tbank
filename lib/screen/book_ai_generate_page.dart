@@ -7,6 +7,7 @@ import 'package:image_picker/image_picker.dart';
 import '../services/ai_question_generator.dart';
 import '../services/ds_api_service.dart';
 import '../services/plugin_manager.dart';
+import '../services/question_quality.dart';
 import 'plugin_type_selector.dart';
 
 /// 拍书出题页。
@@ -47,6 +48,7 @@ class _BookAiGeneratePageState extends State<BookAiGeneratePage> {
   int _count = 10;
 
   bool _generating = false;
+  QuestionQualityReport? _quality;
   ({int finished, int total})? _progress;
   String? _error;
   List<AiBankInfo> _saved = const <AiBankInfo>[];
@@ -242,6 +244,7 @@ class _BookAiGeneratePageState extends State<BookAiGeneratePage> {
       _error = null;
       _progress = null;
       _saved = const <AiBankInfo>[];
+      _quality = null;
     });
 
     final List<AiBankInfo> saved = <AiBankInfo>[];
@@ -276,6 +279,7 @@ class _BookAiGeneratePageState extends State<BookAiGeneratePage> {
               if (!mounted) return;
               setState(() => _progress = (finished: finished, total: total));
             },
+            onQuality: (QuestionQualityReport report) => _quality = report,
           );
 
       if (!mounted) return;
@@ -306,7 +310,11 @@ class _BookAiGeneratePageState extends State<BookAiGeneratePage> {
 
       if (!mounted) return;
       setState(() => _saved = saved);
-      _toast('已生成 ${questions.length} 道题，保存为 ${saved.length} 个文件');
+      final QuestionQualityReport? quality = _quality;
+      final String qualityText = quality != null && quality.hasIssues
+          ? '；${quality.summary}'
+          : '';
+      _toast('已生成 ${questions.length} 道题，保存为 ${saved.length} 个文件$qualityText');
       await _loadBanks();
     } on DsApiException catch (error) {
       if (!mounted) return;

@@ -27,6 +27,15 @@ class QuestionBankStorage {
 
   File? _workingFile; // 文档目录下的工作副本
   File? _dirtyFlag; // 副本比来源新的标记，见类注释
+  File? _sourceStamp; // 记录工作副本对应的源文件指纹
+  String? _sourceFingerprint;
+
+  /// 编辑题库后通知练习页：当前打开的文件内容已变化，需要重新加载。
+  static final ValueNotifier<String?> sourceChangedNotifier =
+      ValueNotifier<String?>(null);
+
+  static const String _stampFileName = '.source';
+  static const String _invalidStamp = 'invalidated';
 
   /// 串行队列：保证「写副本」和「回拷」按调用顺序执行，
   /// 不会出现副本只写了一半就被写回题库的情况。
@@ -51,46 +60,139 @@ class QuestionBankStorage {
   /// - 成功：按来源文件继续；
   /// - 失败：直接读工作副本（副本里是最新统计），并在
   ///   [pendingSyncWarning] 里留下提示，避免「用旧源文件覆盖新统计」。
+  ///
+  /// 如果源文件在练习期间被其它页面（例如题目编辑器）改过，则以源文件为准，
+  /// 丢弃旧工作副本，避免旧副本把新题干/解析覆盖回去。
   Future<QuestionBank> load() async {
     _pendingSyncWarning = null;
 
-    final Directory docs = await getApplicationDocumentsDirectory();
-    final Directory workDir = Directory(
-      '${docs.path}${Platform.pathSeparator}banks'
-      '${Platform.pathSeparator}${stableRefHash(file.uri)}',
-    );
+    final Directory workDir = await _workDirFor(file);
     await workDir.create(recursive: true);
 
-    final File working =
-        File('${workDir.path}${Platform.pathSeparator}${file.name}');
-    final File dirty =
-        File('${workDir.path}${Platform.pathSeparator}.dirty');
+    final File working = File(
+      '${workDir.path}${Platform.pathSeparator}${file.name}',
+    );
+    final File dirty = File('${workDir.path}${Platform.pathSeparator}.dirty');
+    final File stamp = File(
+      '${workDir.path}${Platform.pathSeparator}$_stampFileName',
+    );
+
+    final String sourceRaw;
+    try {
+      sourceRaw = await BankIo.readText(file.uri);
+    } catch (error) {
+      // 源文件暂时读不到（权限撤销、目录被删）：只要还有本地副本，就先用副本。
+      if (await working.exists() && await dirty.exists()) {
+        final String raw = await working.readAsString();
+        final QuestionBank bank = _decode(raw);
+        _workingFile = working;
+        _dirtyFlag = dirty;
+        _sourceStamp = stamp;
+        _pendingSyncWarning = '读取题库源文件失败，已加载本地工作副本；恢复权限后会自动重试。';
+        return bank;
+      }
+      rethrow;
+    }
+    final String sourceFingerprint = stableRefHash(sourceRaw);
+    final String? baseline = await _readStamp(stamp);
+
+    // 源文件被其它页面改过：旧副本不能回拷，直接加载新源文件。
+    if (await working.exists() &&
+        await dirty.exists() &&
+        baseline != null &&
+        baseline != sourceFingerprint) {
+      await working.delete();
+      await dirty.delete();
+      _pendingSyncWarning = '题库文件在练习期间被修改，已优先加载新内容；旧练习统计未合并。';
+    }
 
     // 上次没回拷成功：先补一次；还不行就读副本，保住宿主答过的统计。
     if (await working.exists() && await dirty.exists()) {
       if (await _writeBack(working)) {
         if (await dirty.exists()) await dirty.delete();
+        final String written = await working.readAsString();
+        final QuestionBank bank = _decode(written);
+        _workingFile = working;
+        _dirtyFlag = dirty;
+        await _setSourceFingerprint(written, stamp);
+        return bank;
       } else {
         final String raw = await working.readAsString();
         final QuestionBank bank = _decode(raw);
         _workingFile = working;
         _dirtyFlag = dirty;
-        _pendingSyncWarning =
-            '上次的答题记录还没写回题库文件，已保留在本地；恢复权限后会自动重试。';
+        _sourceStamp = stamp;
+        _sourceFingerprint = sourceFingerprint;
+        _pendingSyncWarning = '上次的答题记录还没写回题库文件，已保留在本地；恢复权限后会自动重试。';
         return bank;
       }
     }
 
     // 正常路径：以题库来源为准，覆盖旧副本
-    final String raw = await BankIo.readText(file.uri);
-
-    await working.writeAsString(raw, flush: true);
+    await working.writeAsString(sourceRaw, flush: true);
     if (await dirty.exists()) await dirty.delete();
 
-    final QuestionBank bank = _decode(raw);
+    final QuestionBank bank = _decode(sourceRaw);
     _workingFile = working;
     _dirtyFlag = dirty;
+    await _setSourceFingerprint(sourceRaw, stamp);
     return bank;
+  }
+
+  Future<void> _setSourceFingerprint(String raw, File stamp) async {
+    _sourceStamp = stamp;
+    _sourceFingerprint = stableRefHash(raw);
+    await _writeStamp(stamp, _sourceFingerprint!);
+  }
+
+  Future<String?> _readStamp(File stamp) async {
+    try {
+      if (!await stamp.exists()) return null;
+      final String value = (await stamp.readAsString()).trim();
+      return value.isEmpty ? null : value;
+    } catch (error) {
+      debugPrint('读取题库源文件指纹失败：$error');
+      return null;
+    }
+  }
+
+  Future<void> _writeStamp(File stamp, String fingerprint) async {
+    try {
+      await stamp.writeAsString(fingerprint, flush: true);
+    } catch (error) {
+      debugPrint('写入题库源文件指纹失败：$error');
+    }
+  }
+
+  static Future<Directory> _workDirFor(QuestionBankFile file) async {
+    final Directory docs = await getApplicationDocumentsDirectory();
+    return Directory(
+      '${docs.path}${Platform.pathSeparator}banks'
+      '${Platform.pathSeparator}${stableRefHash(file.uri)}',
+    );
+  }
+
+  /// 题库编辑器写回源文件后调用：作废旧工作副本，下一次练习必须从源文件重读。
+  ///
+  /// 保留一个 `invalidated` 指纹；如果此时练习页还活着并重新写了工作副本，
+  /// 下次 load 会把这份旧副本识别为过期并丢弃。
+  static Future<void> invalidateForFile(QuestionBankFile file) async {
+    try {
+      final Directory workDir = await _workDirFor(file);
+      if (!await workDir.exists()) return;
+      final File working = File(
+        '${workDir.path}${Platform.pathSeparator}${file.name}',
+      );
+      final File dirty = File('${workDir.path}${Platform.pathSeparator}.dirty');
+      final File stamp = File(
+        '${workDir.path}${Platform.pathSeparator}$_stampFileName',
+      );
+      if (await working.exists()) await working.delete();
+      if (await dirty.exists()) await dirty.delete();
+      await stamp.writeAsString(_invalidStamp, flush: true);
+    } catch (error) {
+      debugPrint('作废旧题库副本失败：$error');
+    }
   }
 
   /// 解析题库 JSON；根节点不是对象时抛出 [FormatException]。
@@ -147,10 +249,35 @@ class QuestionBankStorage {
   Future<bool> syncBack() {
     return _enqueue(() async {
       final File? working = _workingFile;
+      final File? stamp = _sourceStamp;
       if (working == null) return false;
+
+      final String? expected = _sourceFingerprint;
+      if (expected != null) {
+        try {
+          final String currentSource = await BankIo.readText(file.uri);
+          if (stableRefHash(currentSource) != expected) {
+            _pendingSyncWarning = '题库文件已在其它位置修改，未覆盖新内容；本次练习统计保留在本地。';
+            return false;
+          }
+        } catch (error) {
+          debugPrint('校验题库源文件失败：$error');
+          _pendingSyncWarning = '读取题库源文件失败，本次练习统计保留在本地。';
+          return false;
+        }
+      }
 
       final bool ok = await _writeBack(working);
       if (!ok) return false;
+
+      if (stamp != null) {
+        try {
+          final String written = await working.readAsString();
+          await _setSourceFingerprint(written, stamp);
+        } catch (error) {
+          debugPrint('更新题库源文件指纹失败：$error');
+        }
+      }
 
       final File? dirty = _dirtyFlag;
       if (dirty != null) {
@@ -170,10 +297,7 @@ class QuestionBankStorage {
   /// 调用方拿到的 result 仍会抛出原始异常。
   Future<T> _enqueue<T>(Future<T> Function() action) {
     final Future<T> result = _queue.then((_) => action());
-    _queue = result.then<void>(
-      (_) {},
-      onError: (Object _, StackTrace _) {},
-    );
+    _queue = result.then<void>((_) {}, onError: (Object _, StackTrace _) {});
     return result;
   }
 }

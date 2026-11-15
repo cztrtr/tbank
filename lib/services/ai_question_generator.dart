@@ -23,6 +23,7 @@ import '../models/question_bank_file.dart';
 import 'ds_api_service.dart';
 import 'plugin_manager.dart';
 import 'plugin_schema.dart';
+import 'question_quality.dart';
 
 /// 一份已生成的 AI 题库文件。
 class AiBankInfo {
@@ -282,6 +283,7 @@ class AiQuestionGenerator {
     PluginManifest? plugin,
     List<PluginTypeInfo>? pluginTypes,
     void Function(int finished, int total)? onProgress,
+    void Function(QuestionQualityReport report)? onQuality,
   }) async {
     final int target = count < 1 ? 1 : count;
     final List<AiBankInfo> saved = <AiBankInfo>[];
@@ -293,12 +295,15 @@ class AiQuestionGenerator {
         plugin: plugin,
         pluginTypes: pluginTypes ?? plugin.typeInfos,
         onProgress: onProgress,
+        onQuality: onQuality,
       );
     }
 
     final String? typeSpec = null;
     int finished = 0;
     int batchIndex = 0;
+    final QuestionQualityReport quality = QuestionQualityReport();
+    final Set<String> seenQuestions = <String>{};
 
     while (finished < target && batchIndex < 10) {
       final int remaining = target - finished;
@@ -313,14 +318,20 @@ class AiQuestionGenerator {
         typeSpec: typeSpec,
       );
 
-      final List<Map<String, dynamic>> questions = parseQuestions(
+      final List<Map<String, dynamic>> parsedQuestions = parseQuestions(
         raw,
         allowedTypes: plugin?.types.toSet(),
         plugin: plugin,
       );
+      final List<Map<String, dynamic>> questions =
+          QuestionQuality.sanitizeBatch(
+            questions: parsedQuestions,
+            seen: seenQuestions,
+            report: quality,
+          );
       if (questions.isEmpty) {
         if (saved.isEmpty) {
-          throw DsApiException('AI 返回的题目格式不正确，请重试');
+          throw DsApiException('AI 返回的题目格式或质量不合格，请重试');
         }
         break; // 后续批次失败：保留已生成的部分
       }
@@ -349,6 +360,7 @@ class AiQuestionGenerator {
       finished += batchQuestions.length;
       onProgress?.call(finished, target);
     }
+    onQuality?.call(quality);
     return saved;
   }
 
@@ -360,6 +372,7 @@ class AiQuestionGenerator {
     required PluginManifest plugin,
     required List<PluginTypeInfo> pluginTypes,
     void Function(int finished, int total)? onProgress,
+    void Function(QuestionQualityReport report)? onQuality,
   }) async {
     final List<Map<String, dynamic>> questions = await generateWithCoverage(
       plugin: plugin,
@@ -375,6 +388,7 @@ class AiQuestionGenerator {
         );
       },
       onProgress: onProgress,
+      onQuality: onQuality,
     );
 
     for (int i = 0; i < questions.length; i++) {
@@ -407,6 +421,7 @@ class AiQuestionGenerator {
     required int target,
     required Future<String> Function(PluginTypeInfo type, int count) request,
     void Function(int finished, int total)? onProgress,
+    void Function(QuestionQualityReport report)? onQuality,
     int maxCallsPerType = 4,
   }) async {
     final List<PluginTypeInfo> selected = types
@@ -422,6 +437,8 @@ class AiQuestionGenerator {
     final int base = target ~/ selected.length;
     final int remainder = target % selected.length;
     final List<Map<String, dynamic>> questions = <Map<String, dynamic>>[];
+    final Set<String> seenQuestions = <String>{};
+    final QuestionQualityReport quality = QuestionQualityReport();
     int finished = 0;
 
     for (int typeIndex = 0; typeIndex < selected.length; typeIndex++) {
@@ -449,9 +466,14 @@ class AiQuestionGenerator {
         final List<Map<String, dynamic>> matched = parsed
             .where((Map<String, dynamic> q) => q['type'] == type.id)
             .toList();
-        final int take = matched.length > need ? need : matched.length;
+        final List<Map<String, dynamic>> clean = QuestionQuality.sanitizeBatch(
+          questions: matched,
+          seen: seenQuestions,
+          report: quality,
+        );
+        final int take = clean.length > need ? need : clean.length;
         for (int i = 0; i < take; i++) {
-          questions.add(matched[i]);
+          questions.add(clean[i]);
           produced++;
           finished++;
           onProgress?.call(finished, target);
@@ -459,6 +481,7 @@ class AiQuestionGenerator {
       }
     }
 
+    onQuality?.call(quality);
     return questions;
   }
 
