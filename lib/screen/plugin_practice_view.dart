@@ -69,11 +69,11 @@ class PluginPracticeView extends StatefulWidget {
   final VoidCallback onPrevious;
   final Future<String> Function(String answer) onRequestAiExplain;
   final Future<int> Function(String answer, List<Uint8List> images)
-      onRequestAiScore;
+  onRequestAiScore;
   final Future<String> Function(String prompt, List<Uint8List> images)
-      onRequestAiComplete;
+  onRequestAiComplete;
   final Future<void> Function(Map<String, dynamic> pluginData)
-      onUpdatePluginData;
+  onUpdatePluginData;
 
   @override
   State<PluginPracticeView> createState() => _PluginPracticeViewState();
@@ -196,6 +196,14 @@ class _PluginPracticeViewState extends State<PluginPracticeView> {
       await controller.loadUrl(Uri.file(entryPath).toString());
       if (!mounted) return;
       setState(() => _windowsController = controller);
+
+      // WebView2 对本地 file:// 页面的 loadingState 事件偶尔早于页面脚本完成，
+      // 再补一次延迟推送；真正的等待逻辑在 _pushContext 的 JS 重试里。
+      Timer(const Duration(milliseconds: 800), () {
+        if (!mounted || _windowsController != controller) return;
+        _pageReady = true;
+        unawaited(_pushContext());
+      });
     } catch (error) {
       _setError('插件页面初始化失败：$error');
     }
@@ -461,7 +469,28 @@ class _PluginPracticeViewState extends State<PluginPracticeView> {
     final String json = jsonEncode(context)
         .replaceAll('\u2028', '\\u2028')
         .replaceAll('\u2029', '\\u2029');
-    await _eval('window.__tbankReceive($json);');
+    // WebView2 的 loadingState.none 可能早于插件脚本定义 __tbankReceive；
+    // 宿主只推一次会一直停在插件自己的 loading 页，所以等函数就绪后再推。
+    await _eval('''
+(function () {
+  var payload = $json;
+  var tries = 0;
+  function apply() {
+    if (typeof window.__tbankReceive !== 'function') return false;
+    try {
+      window.__tbankReceive(payload);
+      return true;
+    } catch (error) {
+      console.error('tbankReceive failed', error);
+      return false;
+    }
+  }
+  if (apply()) return;
+  var timer = setInterval(function () {
+    if (apply() || ++tries > 100) clearInterval(timer);
+  }, 50);
+})();
+''');
   }
 
   Future<Map<String, dynamic>> _contextWithImage() async {

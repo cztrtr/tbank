@@ -157,20 +157,25 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
           int questionCount = 0;
           int attemptCount = 0;
           int wrongCount = 0;
+          int? minAttemptCount;
           for (final dynamic item in decoded['questions'] as List) {
             if (item is! Map) continue;
             questionCount += 1;
             final dynamic stats = item['stats'];
-            if (stats is! Map) continue;
-            attemptCount += stats['attemptCount'] is num
+            final int attempts = stats is Map && stats['attemptCount'] is num
                 ? (stats['attemptCount'] as num).toInt()
                 : 0;
-            wrongCount += stats['wrongCount'] is num
+            attemptCount += attempts;
+            if (minAttemptCount == null || attempts < minAttemptCount) {
+              minAttemptCount = attempts;
+            }
+            wrongCount += stats is Map && stats['wrongCount'] is num
                 ? (stats['wrongCount'] as num).toInt()
                 : 0;
           }
           loaded[file.uri] = _BankStat(
             questionCount: questionCount,
+            practiceCount: minAttemptCount ?? 0,
             attemptCount: attemptCount,
             wrongCount: wrongCount,
           );
@@ -499,7 +504,7 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
     final String accuracy = stat.accuracy == null
         ? '—'
         : '${(stat.accuracy! * 100).toStringAsFixed(1)}%';
-    return '练习 ${stat.attemptCount} 次 / 正确率 $accuracy';
+    return '练习 ${stat.practiceCount} 次 / 正确率 $accuracy';
   }
 
   /// 搜索时强制展开，保证匹配结果不会被旧的折叠状态藏起来。
@@ -787,11 +792,17 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
 class _BankStat {
   const _BankStat({
     required this.questionCount,
+    required this.practiceCount,
     required this.attemptCount,
     required this.wrongCount,
   });
 
   final int questionCount;
+
+  /// 整本练习轮数：取所有题里最小的作答次数。
+  /// 例如 3 道题分别答了 5/3/4 次，说明整本至少完整练过 3 轮。
+  final int practiceCount;
+
   final int attemptCount;
   final int wrongCount;
 
