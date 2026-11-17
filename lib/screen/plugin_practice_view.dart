@@ -85,6 +85,9 @@ class PluginPracticeView extends StatefulWidget {
 }
 
 class _PluginPracticeViewState extends State<PluginPracticeView> {
+  /// 插件 tbankFetch 复用一个 Client，避免每次请求重新建立连接。
+  static final http.Client _fetchClient = http.Client();
+
   WebViewController? _androidController;
   WebviewController? _windowsController;
   StreamSubscription<dynamic>? _windowsMessage;
@@ -512,7 +515,7 @@ class _PluginPracticeViewState extends State<PluginPracticeView> {
     }
     final String? body = args['body']?.toString();
 
-    final http.Client client = http.Client();
+    final http.Client client = _fetchClient;
     try {
       final http.Response response = method == 'POST'
           ? await client
@@ -531,8 +534,6 @@ class _PluginPracticeViewState extends State<PluginPracticeView> {
       };
     } catch (error) {
       return <String, dynamic>{'error': '网络请求失败：$error'};
-    } finally {
-      client.close();
     }
   }
 

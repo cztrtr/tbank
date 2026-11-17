@@ -23,26 +23,14 @@ class _MainScreenState extends State<MainScreen> {
 
   static const List<({IconData icon, IconData selectedIcon, String label})>
   _destinations = <({IconData icon, IconData selectedIcon, String label})>[
-    (
-      icon: Icons.home_outlined,
-      selectedIcon: Icons.home,
-      label: '首页',
-    ),
+    (icon: Icons.home_outlined, selectedIcon: Icons.home, label: '首页'),
     (
       icon: Icons.collections_bookmark_outlined,
       selectedIcon: Icons.collections_bookmark,
       label: '管理',
     ),
-    (
-      icon: Icons.quiz_outlined,
-      selectedIcon: Icons.quiz,
-      label: '练习',
-    ),
-    (
-      icon: Icons.person_outline,
-      selectedIcon: Icons.person,
-      label: '我的',
-    ),
+    (icon: Icons.quiz_outlined, selectedIcon: Icons.quiz, label: '练习'),
+    (icon: Icons.person_outline, selectedIcon: Icons.person, label: '我的'),
   ];
 
   int _currentIndex = 0; // 当前底部导航下标
@@ -108,8 +96,7 @@ class _MainScreenState extends State<MainScreen> {
 
     final NavigationBar navigationBar = NavigationBar(
       selectedIndex: _currentIndex,
-      onDestinationSelected: (index) =>
-          setState(() => _currentIndex = index),
+      onDestinationSelected: (index) => setState(() => _currentIndex = index),
       destinations: <NavigationDestination>[
         for (final destination in _destinations)
           NavigationDestination(

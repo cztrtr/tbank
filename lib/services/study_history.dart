@@ -101,9 +101,7 @@ class StudyHistory {
 
   /// 管理页/我的页监听它即可实时刷新学习历史摘要。
   static final ValueNotifier<StudyHistoryData> notifier =
-      ValueNotifier<StudyHistoryData>(
-        StudyHistoryData(const <StudyDay>[]),
-      );
+      ValueNotifier<StudyHistoryData>(StudyHistoryData(const <StudyDay>[]));
 
   static String _key(DateTime date) {
     final String month = date.month.toString().padLeft(2, '0');

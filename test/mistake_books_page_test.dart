@@ -82,9 +82,7 @@ void main() {
     expect(find.text('Alpha'), findsOneWidget, reason: '错题本');
   });
 
-  testWidgets('子目录题库的错题本按「根目录 → 最后一级子目录」分级', (
-    WidgetTester tester,
-  ) async {
+  testWidgets('子目录题库的错题本按「根目录 → 最后一级子目录」分级', (WidgetTester tester) async {
     final String sep = Platform.pathSeparator;
     final String bankDir = '${temp.path}$sep题库根$sep父A$sep子1';
     final String subDir = '$bankDir$sep线代';
@@ -133,9 +131,7 @@ void main() {
     expect(find.text('Alpha'), findsOneWidget, reason: '错题本');
   });
 
-  testWidgets('同一根目录下的多个子目录只显示一次根目录标题', (
-    WidgetTester tester,
-  ) async {
+  testWidgets('同一根目录下的多个子目录只显示一次根目录标题', (WidgetTester tester) async {
     final String sep = Platform.pathSeparator;
     final String bankDir = '${temp.path}$sep题库根$sep父A$sep细胞生物学';
     final String sub1 = '$bankDir${sep}1_绪论';
@@ -145,8 +141,9 @@ void main() {
     await tester.runAsync(() async {
       await Directory(sub1).create(recursive: true);
       await Directory(sub3).create(recursive: true);
-      final String emptyBank =
-          jsonEncode(<String, dynamic>{'questions': <dynamic>[]});
+      final String emptyBank = jsonEncode(<String, dynamic>{
+        'questions': <dynamic>[],
+      });
       await File('$sub1${sep}a.json').writeAsString(emptyBank);
       await File('$sub3${sep}b.json').writeAsString(emptyBank);
 
@@ -157,22 +154,14 @@ void main() {
       await File('$book1${sep}Alpha.json').writeAsString(
         jsonEncode(<String, dynamic>{
           'questions': <Map<String, dynamic>>[
-            <String, dynamic>{
-              'id': 'C001',
-              'origin': 'q_a',
-              'mistakeScore': 3,
-            },
+            <String, dynamic>{'id': 'C001', 'origin': 'q_a', 'mistakeScore': 3},
           ],
         }),
       );
       await File('$book3${sep}Beta.json').writeAsString(
         jsonEncode(<String, dynamic>{
           'questions': <Map<String, dynamic>>[
-            <String, dynamic>{
-              'id': 'C001',
-              'origin': 'q_b',
-              'mistakeScore': 3,
-            },
+            <String, dynamic>{'id': 'C001', 'origin': 'q_b', 'mistakeScore': 3},
           ],
         }),
       );

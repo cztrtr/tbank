@@ -316,9 +316,7 @@ class QuestionCodec {
   }
 
   /// 序列化一道题；`image` / `analysis` 必须始终写回。
-  static Map<String, dynamic> questionToJson(
-    Question question,
-  ) {
+  static Map<String, dynamic> questionToJson(Question question) {
     final Map<String, dynamic> json = <String, dynamic>{
       'id': question.id,
       'type': question.typeId,

@@ -91,8 +91,10 @@ class QuestionEditorAi {
       buffer.writeln('- 必须给出正确答案，选择题的答案必须落在选项 key 里；');
       buffer.writeln('- 附上清晰、能自学的解析。');
     }
-    buffer.writeln('- 数学表达式用 LaTeX：行内用 \$...\$，独立公式用 \$\$...\$\$，'
-        '不要裸写 \\frac、\\sqrt 等命令；');
+    buffer.writeln(
+      '- 数学表达式用 LaTeX：行内用 \$...\$，独立公式用 \$\$...\$\$，'
+      '不要裸写 \\frac、\\sqrt 等命令；',
+    );
     buffer.writeln('- 只输出 JSON，不要任何解释文字，也不要用 Markdown 围栏。');
 
     // 用户填的方向 / 重点：放在硬性约束之后，作为可覆盖的偏好
@@ -111,8 +113,10 @@ class QuestionEditorAi {
       '"correctAnswer":["A"],"analysis":"解析"}]}',
     );
     if (question.isFillBlank) {
-      buffer.writeln('（填空 / 主观题把 options 写成空数组，'
-          'correctAnswer 直接写答案文本。）');
+      buffer.writeln(
+        '（填空 / 主观题把 options 写成空数组，'
+        'correctAnswer 直接写答案文本。）',
+      );
     }
     buffer.writeln();
     buffer.writeln('原题：');

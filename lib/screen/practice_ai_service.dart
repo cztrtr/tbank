@@ -19,10 +19,7 @@ class PracticeAiService {
     if (!question.hasImage || sourceDirectoryRef == null) return null;
 
     try {
-      return await BankIo.readSiblingBytes(
-        sourceDirectoryRef,
-        question.image,
-      );
+      return await BankIo.readSiblingBytes(sourceDirectoryRef, question.image);
     } catch (error) {
       debugPrint('读取题目配图失败：$error');
       return null;
@@ -36,8 +33,10 @@ class PracticeAiService {
     required List<Uint8List> answerImages,
     required String? sourceDirectoryRef,
   }) async {
-    final Uint8List? imageBytes =
-        await questionImage(question, sourceDirectoryRef);
+    final Uint8List? imageBytes = await questionImage(
+      question,
+      sourceDirectoryRef,
+    );
 
     return DsApiService.scoreAnswer(
       question: question.question,
@@ -64,8 +63,10 @@ class PracticeAiService {
     required List<Uint8List> answerImages,
     required String? sourceDirectoryRef,
   }) async {
-    final Uint8List? imageBytes =
-        await questionImage(question, sourceDirectoryRef);
+    final Uint8List? imageBytes = await questionImage(
+      question,
+      sourceDirectoryRef,
+    );
 
     return DsApiService.explainQuestion(
       question: question.question,
@@ -75,8 +76,7 @@ class PracticeAiService {
       correctAnswer: correctAnswer,
       userAnswer: question.isFillBlank ? userAnswer : null,
       imageBytes: imageBytes,
-      answerImages:
-          question.isFillBlank ? answerImages : const <Uint8List>[],
+      answerImages: question.isFillBlank ? answerImages : const <Uint8List>[],
     );
   }
 }

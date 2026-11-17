@@ -66,8 +66,7 @@ class BankIo {
 
     final List<File> rootFiles = <File>[];
     final List<Directory> subDirs = <Directory>[];
-    await for (final FileSystemEntity entity
-        in dir.list(followLinks: false)) {
+    await for (final FileSystemEntity entity in dir.list(followLinks: false)) {
       if (entity is File) {
         rootFiles.add(entity);
       } else if (entity is Directory && recursive) {
@@ -87,10 +86,7 @@ class BankIo {
           directoryRef: fileDirectory,
           sourceDirectoryRef: directoryRef,
           subDirectory: subDirectory,
-          directoryName: _combinedDirectoryName(
-            directoryName,
-            subDirectory,
-          ),
+          directoryName: _combinedDirectoryName(directoryName, subDirectory),
         ),
       );
     }
@@ -102,8 +98,9 @@ class BankIo {
     for (final Directory subDir in subDirs) {
       final String subDirectory = _lastPathSegment(subDir.path);
       try {
-        await for (final FileSystemEntity entity
-            in subDir.list(followLinks: false)) {
+        await for (final FileSystemEntity entity in subDir.list(
+          followLinks: false,
+        )) {
           if (entity is File) {
             addFile(entity, subDir.path, subDirectory);
           }
@@ -126,10 +123,12 @@ class BankIo {
 
   /// 按根文件的名字、子目录文件的「子目录/名字」排序，根文件顺序和以前一致。
   static int _compareFiles(QuestionBankFile a, QuestionBankFile b) {
-    final String left =
-        a.subDirectory.isEmpty ? a.name : '${a.subDirectory}/${a.name}';
-    final String right =
-        b.subDirectory.isEmpty ? b.name : '${b.subDirectory}/${b.name}';
+    final String left = a.subDirectory.isEmpty
+        ? a.name
+        : '${a.subDirectory}/${a.name}';
+    final String right = b.subDirectory.isEmpty
+        ? b.name
+        : '${b.subDirectory}/${b.name}';
     return left.toLowerCase().compareTo(right.toLowerCase());
   }
 

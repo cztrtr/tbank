@@ -256,10 +256,7 @@ class PluginManager {
   static const String builtinId = 'standard';
 
   /// 随 APK 发布的内置插件；它们会自动同步到插件目录，但不可卸载。
-  static const List<String> builtinIds = <String>[
-    builtinId,
-    'formula-recite',
-  ];
+  static const List<String> builtinIds = <String>[builtinId, 'formula-recite'];
 
   static bool isBuiltin(String id) => builtinIds.contains(id);
   static const String manifestName = 'manifest.json';
@@ -386,11 +383,12 @@ class PluginManager {
       }
     }
 
-    final List<String> assets = manifest
-        .listAssets()
-        .where((String asset) => asset.startsWith(prefix))
-        .toList()
-      ..sort();
+    final List<String> assets =
+        manifest
+            .listAssets()
+            .where((String asset) => asset.startsWith(prefix))
+            .toList()
+          ..sort();
     final String syncSignature = stableRefHash(
       '${assetManifest.version}|${assets.join('|')}',
     );

@@ -61,8 +61,7 @@ void main() {
       ),
     );
 
-    final PracticeProgress? loaded =
-        await PracticeProgress.load(file, ids);
+    final PracticeProgress? loaded = await PracticeProgress.load(file, ids);
     expect(loaded, isNotNull);
     expect(loaded!.index, 2);
     expect(loaded.answeredCount, 3);
@@ -112,8 +111,7 @@ void main() {
   });
 
   test('损坏的进度文件返回 null，不抛异常', () async {
-    final Directory dir =
-        Directory('${temp.path}${sep}progress');
+    final Directory dir = Directory('${temp.path}${sep}progress');
     await dir.create(recursive: true);
     // 文件名与 PracticeProgress 的命名无关，这里直接找它写出的路径
     await PracticeProgress.save(
@@ -145,8 +143,7 @@ void main() {
       ),
     );
 
-    final PracticeProgress? loaded =
-        await PracticeProgress.load(file, ids);
+    final PracticeProgress? loaded = await PracticeProgress.load(file, ids);
     expect(loaded!.index, ids.length - 1);
     expect(loaded.answeredCount, ids.length);
     expect(loaded.correctCount, ids.length);

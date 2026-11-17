@@ -344,8 +344,7 @@ class _BookAiGeneratePageState extends State<BookAiGeneratePage> {
       setState(() => _saved = saved);
       final QuestionQualityReport? quality = _quality;
       final String qualityText =
-          quality != null &&
-              (quality.hasIssues || quality.warnings.isNotEmpty)
+          quality != null && (quality.hasIssues || quality.warnings.isNotEmpty)
           ? '；${quality.summary}'
           : '';
       _toast('已生成 ${questions.length} 道题，保存为 ${saved.length} 个文件$qualityText');

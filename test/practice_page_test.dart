@@ -149,15 +149,13 @@ void main() {
     });
 
     QuestionBankFile bank() => QuestionBankFile(
-          name: '两题.json',
-          uri: bankFile.path,
-          directoryRef: bankDir,
-          directoryName: '题库2',
-        );
-
-    await tester.pumpWidget(
-      MaterialApp(home: PracticePage(bank: bank())),
+      name: '两题.json',
+      uri: bankFile.path,
+      directoryRef: bankDir,
+      directoryName: '题库2',
     );
+
+    await tester.pumpWidget(MaterialApp(home: PracticePage(bank: bank())));
     await _drainIo(tester);
 
     // 第 1 题答对，切到第 2 题
@@ -177,9 +175,7 @@ void main() {
     await _drainIo(tester);
 
     // 重新进入：停在第 2 题，并提示恢复了进度
-    await tester.pumpWidget(
-      MaterialApp(home: PracticePage(bank: bank())),
-    );
+    await tester.pumpWidget(MaterialApp(home: PracticePage(bank: bank())));
     await _drainIo(tester);
     expect(find.textContaining('第 2 / 2 题'), findsOneWidget);
     expect(find.text('已恢复上次练习进度（第 2 题）'), findsOneWidget);

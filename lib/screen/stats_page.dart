@@ -66,8 +66,9 @@ class _StatsPageState extends State<StatsPage> {
     final List<QuestionBankFile> files = scan.files;
 
     // 解析在 BankRepository 的 isolate 里完成，并与管理页共享缓存。
-    final Map<String, BankStat> stats = await BankRepository.instance
-        .loadStats(files);
+    final Map<String, BankStat> stats = await BankRepository.instance.loadStats(
+      files,
+    );
 
     final Map<String, _GroupStat> groups = <String, _GroupStat>{};
     final List<({String question, int wrong})> wrongItems =

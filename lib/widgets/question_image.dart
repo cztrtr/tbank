@@ -123,8 +123,8 @@ class _QuestionImageState extends State<QuestionImage> {
                 // 文件损坏、格式不支持等解码失败时也走占位框
                 errorBuilder:
                     (BuildContext context, Object error, StackTrace? _) {
-                  return _buildPlaceholder(context, name, '图片无法解码');
-                },
+                      return _buildPlaceholder(context, name, '图片无法解码');
+                    },
               ),
             ),
           ),
@@ -155,11 +155,7 @@ class _QuestionImageState extends State<QuestionImage> {
   }
 
   /// 图片不可用时的占位块：图标 + 原因 + 文件名。
-  Widget _buildPlaceholder(
-    BuildContext context,
-    String name,
-    String reason,
-  ) {
+  Widget _buildPlaceholder(BuildContext context, String name, String reason) {
     final ColorScheme colorScheme = Theme.of(context).colorScheme;
 
     return Container(
@@ -182,10 +178,7 @@ class _QuestionImageState extends State<QuestionImage> {
           Text(
             '$reason：$name',
             textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 12,
-              color: colorScheme.onSurfaceVariant,
-            ),
+            style: TextStyle(fontSize: 12, color: colorScheme.onSurfaceVariant),
           ),
         ],
       ),

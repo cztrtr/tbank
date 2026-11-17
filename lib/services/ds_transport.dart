@@ -223,9 +223,7 @@ class DsTransport {
           ? null
           : int.tryParse(retryAfter.trim());
       await Future<void>.delayed(
-        seconds == null
-            ? wait
-            : Duration(seconds: seconds.clamp(1, 10)),
+        seconds == null ? wait : Duration(seconds: seconds.clamp(1, 10)),
       );
       wait *= 2;
     }

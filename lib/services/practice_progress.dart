@@ -75,17 +75,19 @@ class PracticeProgress {
         });
       }
 
-      final int rawIndex =
-          decoded['index'] is num ? (decoded['index'] as num).toInt() : 0;
+      final int rawIndex = decoded['index'] is num
+          ? (decoded['index'] as num).toInt()
+          : 0;
       final int safeIndex = rawIndex < 0
           ? 0
-          : (rawIndex >= questionIds.length ? questionIds.length - 1 : rawIndex);
+          : (rawIndex >= questionIds.length
+                ? questionIds.length - 1
+                : rawIndex);
 
       final int rawAnswered = decoded['answeredCount'] is num
           ? (decoded['answeredCount'] as num).toInt()
           : answers.length;
-      final int safeAnswered =
-          rawAnswered.clamp(0, questionIds.length).toInt();
+      final int safeAnswered = rawAnswered.clamp(0, questionIds.length).toInt();
 
       final int rawCorrect = decoded['correctCount'] is num
           ? (decoded['correctCount'] as num).toInt()
@@ -145,8 +147,9 @@ class PracticeProgress {
 
   static Future<File> _fileFor(QuestionBankFile file) async {
     final Directory support = await getApplicationSupportDirectory();
-    final Directory dir =
-        Directory('${support.path}${Platform.pathSeparator}progress');
+    final Directory dir = Directory(
+      '${support.path}${Platform.pathSeparator}progress',
+    );
     if (!await dir.exists()) await dir.create(recursive: true);
     return File(
       '${dir.path}${Platform.pathSeparator}'

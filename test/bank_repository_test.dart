@@ -58,13 +58,11 @@ void main() {
   }
 
   test('合并用户目录和 AI 题库，并按 uri 去重', () async {
-    final Directory userDir =
-        Directory('${temp.path}$sep用户题库');
+    final Directory userDir = Directory('${temp.path}$sep用户题库');
     await writeJson(userDir, 'a.json');
     await writeJson(userDir, 'b.json');
 
-    final Directory aiDir =
-        Directory('${temp.path}${sep}Question$sep主题');
+    final Directory aiDir = Directory('${temp.path}${sep}Question$sep主题');
     await writeJson(aiDir, 'ai.json');
 
     // 同一个目录加两次，扫描结果不能重复
@@ -73,8 +71,9 @@ void main() {
       userDir.path,
     ];
 
-    final BankScanResult result =
-        await BankRepository.instance.listAll(refresh: true);
+    final BankScanResult result = await BankRepository.instance.listAll(
+      refresh: true,
+    );
 
     expect(result.errors, isEmpty);
     expect(result.files, hasLength(3));
@@ -83,10 +82,7 @@ void main() {
       containsAll(<String>['a.json', 'b.json', 'ai.json']),
     );
     // 结果只读，防止调用方误改缓存
-    expect(
-      () => result.files.add(result.files.first),
-      throwsUnsupportedError,
-    );
+    expect(() => result.files.add(result.files.first), throwsUnsupportedError);
   });
 
   test('2 秒内复用缓存，refresh 强制重新扫描', () async {
@@ -94,19 +90,20 @@ void main() {
     await writeJson(userDir, 'a.json');
     AppConfig.questionBankDirsNotifier.value = <String>[userDir.path];
 
-    final BankScanResult first =
-        await BankRepository.instance.listAll(refresh: true);
+    final BankScanResult first = await BankRepository.instance.listAll(
+      refresh: true,
+    );
     expect(first.files, hasLength(1));
 
     // 新增文件但走缓存：列表不变
     await writeJson(userDir, 'b.json');
-    final BankScanResult cached =
-        await BankRepository.instance.listAll();
+    final BankScanResult cached = await BankRepository.instance.listAll();
     expect(cached.files, hasLength(1));
 
     // 强制刷新后才能看到新文件
-    final BankScanResult refreshed =
-        await BankRepository.instance.listAll(refresh: true);
+    final BankScanResult refreshed = await BankRepository.instance.listAll(
+      refresh: true,
+    );
     expect(refreshed.files, hasLength(2));
   });
 
@@ -119,8 +116,9 @@ void main() {
       userDir.path,
     ];
 
-    final BankScanResult result =
-        await BankRepository.instance.listAll(refresh: true);
+    final BankScanResult result = await BankRepository.instance.listAll(
+      refresh: true,
+    );
 
     expect(result.errors, isNotEmpty);
     expect(result.files, hasLength(1));

@@ -115,18 +115,20 @@ class BankRepository {
     final Future<BankScanResult> future = _scan();
     _inflight = future;
     unawaited(
-      future.then<void>(
-        (BankScanResult result) {
-          _cached = result;
-          _cachedAt = DateTime.now();
-        },
-        onError: (Object error, StackTrace stack) {
-          // _scan 自己吞掉了目录异常，这里只防御未预料的错误
-          debugPrint('扫描题库失败：$error');
-        },
-      ).whenComplete(() {
-        if (identical(_inflight, future)) _inflight = null;
-      }),
+      future
+          .then<void>(
+            (BankScanResult result) {
+              _cached = result;
+              _cachedAt = DateTime.now();
+            },
+            onError: (Object error, StackTrace stack) {
+              // _scan 自己吞掉了目录异常，这里只防御未预料的错误
+              debugPrint('扫描题库失败：$error');
+            },
+          )
+          .whenComplete(() {
+            if (identical(_inflight, future)) _inflight = null;
+          }),
     );
     return future;
   }
@@ -147,8 +149,7 @@ class BankRepository {
         files
             .sublist(start, end)
             .map(
-              (QuestionBankFile file) =>
-                  _loadAnalysis(file, refresh: refresh),
+              (QuestionBankFile file) => _loadAnalysis(file, refresh: refresh),
             ),
       );
       for (int i = 0; i < chunk.length; i++) {
@@ -207,9 +208,7 @@ class BankRepository {
             if (item is! Map) continue;
             wrongItems.add((
               question: item['question']?.toString() ?? '',
-              wrong: item['wrong'] is num
-                  ? (item['wrong'] as num).toInt()
-                  : 0,
+              wrong: item['wrong'] is num ? (item['wrong'] as num).toInt() : 0,
             ));
           }
         }
@@ -258,22 +257,22 @@ class BankRepository {
     // 用户添加的目录并发扫描：单个目录失败只记错误，不影响其它目录
     final List<({List<QuestionBankFile> files, String? error})> results =
         await Future.wait(
-      dirs.map((String dirRef) async {
-        try {
-          final List<QuestionBankFile> found = await BankIo.listJsonFiles(
-            dirRef,
-            directoryName: BankIo.displayNameOf(dirRef),
-            recursive: true,
-          );
-          return (files: found, error: null as String?);
-        } catch (error) {
-          return (
-            files: const <QuestionBankFile>[],
-            error: '读取失败：${BankIo.displayNameOf(dirRef)}（$error）',
-          );
-        }
-      }),
-    );
+          dirs.map((String dirRef) async {
+            try {
+              final List<QuestionBankFile> found = await BankIo.listJsonFiles(
+                dirRef,
+                directoryName: BankIo.displayNameOf(dirRef),
+                recursive: true,
+              );
+              return (files: found, error: null as String?);
+            } catch (error) {
+              return (
+                files: const <QuestionBankFile>[],
+                error: '读取失败：${BankIo.displayNameOf(dirRef)}（$error）',
+              );
+            }
+          }),
+        );
 
     for (final ({List<QuestionBankFile> files, String? error}) result
         in results) {

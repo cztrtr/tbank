@@ -60,9 +60,9 @@ void main() {
     expect(AppConfig.dsApiKeyStatus, DsApiKeyStatus.secure);
     expect(store.peek(SecretKeys.dsApiKey), 'sk-legacy-1234567890');
 
-    final Map<String, dynamic> saved =
-        jsonDecode(await File(configPath).readAsString())
-            as Map<String, dynamic>;
+    final Map<String, dynamic> saved = jsonDecode(
+      await File(configPath).readAsString(),
+    ) as Map<String, dynamic>;
     expect(saved.containsKey('dsApiKey'), isFalse);
     expect(saved['configVersion'], 2);
     expect(saved['dsApiKeyStorage'], 'secure');
@@ -83,9 +83,9 @@ void main() {
     expect(AppConfig.dsApiKeyStatus, DsApiKeyStatus.legacyFallback);
     expect(AppConfig.dsApiKeyWarning, isNotNull);
 
-    final Map<String, dynamic> saved =
-        jsonDecode(await File(configPath).readAsString())
-            as Map<String, dynamic>;
+    final Map<String, dynamic> saved = jsonDecode(
+      await File(configPath).readAsString(),
+    ) as Map<String, dynamic>;
     expect(saved['dsApiKey'], isNotNull);
   });
 
@@ -98,9 +98,9 @@ void main() {
 
     expect(saved, isFalse);
     expect(AppConfig.dsApiKey, isNull);
-    final Map<String, dynamic> data =
-        jsonDecode(await File(configPath).readAsString())
-            as Map<String, dynamic>;
+    final Map<String, dynamic> data = jsonDecode(
+      await File(configPath).readAsString(),
+    ) as Map<String, dynamic>;
     expect(data.containsKey('dsApiKey'), isFalse);
   });
 
@@ -117,9 +117,9 @@ void main() {
 
     expect(AppConfig.dsApiKey, 'sk-secure-1234567890');
     expect(AppConfig.dsApiKeyStatus, DsApiKeyStatus.secure);
-    final Map<String, dynamic> saved =
-        jsonDecode(await File(configPath).readAsString())
-            as Map<String, dynamic>;
+    final Map<String, dynamic> saved = jsonDecode(
+      await File(configPath).readAsString(),
+    ) as Map<String, dynamic>;
     expect(saved.containsKey('dsApiKey'), isFalse);
   });
 
@@ -144,20 +144,31 @@ void main() {
     expect(AppConfig.dsApiKeyStatus, DsApiKeyStatus.none);
   });
 
+  test('配置标记 secure 但安全存储读不到时提示重新输入', () async {
+    final MemorySecretStore store = MemorySecretStore();
+    AppConfig.setSecretStoreForTest(store);
+    await writeConfig(<String, dynamic>{'dsApiKeyStorage': 'secure'});
+
+    await AppConfig.init();
+
+    expect(AppConfig.dsApiKey, isNull);
+    expect(AppConfig.dsApiKeyStatus, DsApiKeyStatus.missingAfterRestore);
+    expect(AppConfig.dsApiKeyWarning, isNotNull);
+  });
+
   test('config.json 损坏时从 .bak 恢复，并提示用户', () async {
     await File(configPath).writeAsString('{ 这不是 JSON');
-    await File('$configPath.bak').writeAsString(
-      jsonEncode(<String, dynamic>{'clockOnNum': 7}),
-    );
+    await File('$configPath.bak')
+        .writeAsString(jsonEncode(<String, dynamic>{'clockOnNum': 7}));
 
     await AppConfig.init();
 
     expect(AppConfig.loadWarning, isNotNull);
     expect(AppConfig.clockOnNotifier.value, 7);
     // 恢复后主文件被重写为合法 JSON。
-    final Map<String, dynamic> saved =
-        jsonDecode(await File(configPath).readAsString())
-            as Map<String, dynamic>;
+    final Map<String, dynamic> saved = jsonDecode(
+      await File(configPath).readAsString(),
+    ) as Map<String, dynamic>;
     expect(saved['clockOnNum'], 7);
   });
 }

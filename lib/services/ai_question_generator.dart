@@ -527,9 +527,7 @@ class AiQuestionGenerator {
 
       if (produced < quota) {
         // 已生成的题保留；只记录缺口，由页面提示用户。
-        quality.addWarning(
-          '题型「${type.name}」只生成 $produced/$quota 道',
-        );
+        quality.addWarning('题型「${type.name}」只生成 $produced/$quota 道');
       }
     }
 

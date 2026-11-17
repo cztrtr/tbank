@@ -26,9 +26,7 @@ void main() {
   test('清理合法题并把选项和题干预处理', () {
     final QuestionQualityReport report = QuestionQualityReport();
     final List<Map<String, dynamic>> result = QuestionQuality.sanitizeBatch(
-      questions: <Map<String, dynamic>>[
-        _question(question: '  以下哪项正确？  '),
-      ],
+      questions: <Map<String, dynamic>>[_question(question: '  以下哪项正确？  ')],
       seen: <String>{},
       report: report,
     );

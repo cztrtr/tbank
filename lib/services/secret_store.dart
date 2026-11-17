@@ -64,17 +64,12 @@ class FlutterSecretStore implements SecretStore {
   @override
   Future<String?> read(String key) async {
     try {
-      final String? value = await _storage
-          .read(key: key)
-          .timeout(_timeout);
+      final String? value = await _storage.read(key: key).timeout(_timeout);
       _available = true;
       return value;
     } on MissingPluginException {
       _available = false;
-      throw const SecretStoreException(
-        'unavailable',
-        '当前平台没有安全存储实现',
-      );
+      throw const SecretStoreException('unavailable', '当前平台没有安全存储实现');
     } on TimeoutException {
       _available = false;
       throw const SecretStoreException('unavailable', '读取安全存储超时');
@@ -92,25 +87,17 @@ class FlutterSecretStore implements SecretStore {
   @override
   Future<void> write(String key, String value) async {
     try {
-      await _storage
-          .write(key: key, value: value)
-          .timeout(_timeout);
+      await _storage.write(key: key, value: value).timeout(_timeout);
       _available = true;
     } on MissingPluginException {
       _available = false;
-      throw const SecretStoreException(
-        'unavailable',
-        '当前平台没有安全存储实现',
-      );
+      throw const SecretStoreException('unavailable', '当前平台没有安全存储实现');
     } on TimeoutException {
       _available = false;
       throw const SecretStoreException('unavailable', '写入安全存储超时');
     } on PlatformException catch (error) {
       _available = false;
-      throw SecretStoreException(
-        'unavailable',
-        '写入安全存储失败（${error.code}）',
-      );
+      throw SecretStoreException('unavailable', '写入安全存储失败（${error.code}）');
     }
   }
 
@@ -121,19 +108,13 @@ class FlutterSecretStore implements SecretStore {
       _available = true;
     } on MissingPluginException {
       _available = false;
-      throw const SecretStoreException(
-        'unavailable',
-        '当前平台没有安全存储实现',
-      );
+      throw const SecretStoreException('unavailable', '当前平台没有安全存储实现');
     } on TimeoutException {
       _available = false;
       throw const SecretStoreException('unavailable', '删除安全存储超时');
     } on PlatformException catch (error) {
       _available = false;
-      throw SecretStoreException(
-        'unavailable',
-        '删除安全存储失败（${error.code}）',
-      );
+      throw SecretStoreException('unavailable', '删除安全存储失败（${error.code}）');
     }
   }
 

@@ -8,7 +8,7 @@ import '../services/practice_progress.dart';
 /// 抽出来以后页面只做渲染，状态迁移可以单独写测试。
 class PracticeController {
   PracticeController({QuestionBank? bank})
-      : _bank = bank ?? QuestionBank(questions: <Question>[]);
+    : _bank = bank ?? QuestionBank(questions: <Question>[]);
 
   QuestionBank _bank;
 
@@ -65,8 +65,7 @@ class PracticeController {
     correctCount = progress.correctCount;
     answeredStates.addAll(progress.answers);
 
-    final ({bool correct, Set<String> selected})? saved =
-        answeredStates[index];
+    final ({bool correct, Set<String> selected})? saved = answeredStates[index];
     if (saved != null) {
       answered = true;
       wasCorrect = saved.correct;

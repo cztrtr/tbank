@@ -86,17 +86,15 @@ class _MistakeBooksPageState extends State<MistakeBooksPage> {
       });
 
       if (added > 0) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('已收录 $added 道新错题')),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('已收录 $added 道新错题')));
       }
     } catch (error) {
       if (!mounted) return;
       setState(() => _collecting = false);
       debugPrint('收集错题失败：$error');
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('收集新错题失败，稍后重试')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('收集新错题失败，稍后重试')));
     }
   }
 
@@ -126,8 +124,9 @@ class _MistakeBooksPageState extends State<MistakeBooksPage> {
 
     // 递归一层的子目录题库：分组名是「根名/子目录」，父级仍按根目录推导
     try {
-      final BankScanResult scan =
-          await BankRepository.instance.listAll(refresh: true);
+      final BankScanResult scan = await BankRepository.instance.listAll(
+        refresh: true,
+      );
       for (final QuestionBankFile file in scan.files) {
         // AI 题库没有 sourceDirectoryRef，交给下面的 AI 分支处理
         if (file.sourceDirectoryRef == null) continue;
@@ -314,7 +313,8 @@ class _MistakeBooksPageState extends State<MistakeBooksPage> {
       // 把「根目录/子目录」拆成 rootLabel + subLabel；同一根目录下的多个
       // 子目录共用一行 rootLabel，不再重复显示「细胞生物学」。
       final List<String> parts = book.groupName.split('/');
-      final bool nested = parts.length > 1 &&
+      final bool nested =
+          parts.length > 1 &&
           source != null &&
           BankIo.displayNameOf(source.ref) != parts.last;
       final String rootLabel;
@@ -335,10 +335,7 @@ class _MistakeBooksPageState extends State<MistakeBooksPage> {
             parentKey,
             () => <String, Map<String, List<MistakeBookInfo>>>{},
           )
-          .putIfAbsent(
-            rootLabel,
-            () => <String, List<MistakeBookInfo>>{},
-          )
+          .putIfAbsent(rootLabel, () => <String, List<MistakeBookInfo>>{})
           .putIfAbsent(subLabel, () => <MistakeBookInfo>[])
           .add(book);
     }
@@ -346,8 +343,12 @@ class _MistakeBooksPageState extends State<MistakeBooksPage> {
     return ListView(
       padding: const EdgeInsets.symmetric(vertical: 8),
       children: <Widget>[
-        for (final MapEntry<String, Map<String, Map<String, List<MistakeBookInfo>>>>
-            parent in tree.entries) ...<Widget>[
+        for (final MapEntry<
+              String,
+              Map<String, Map<String, List<MistakeBookInfo>>>
+            >
+            parent
+            in tree.entries) ...<Widget>[
           // 父文件夹标题（同一父级只画一次）
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
@@ -376,7 +377,8 @@ class _MistakeBooksPageState extends State<MistakeBooksPage> {
           ),
 
           for (final MapEntry<String, Map<String, List<MistakeBookInfo>>>
-              rootEntry in parent.value.entries)
+              rootEntry
+              in parent.value.entries)
             ..._buildRootSection(
               colorScheme,
               virtualParents.contains(parent.key),

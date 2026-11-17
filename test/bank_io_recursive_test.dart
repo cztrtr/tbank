@@ -43,10 +43,11 @@ void main() {
   });
 
   test('recursive=false 只扫根目录', () async {
-    final List<QuestionBankFile> files =
-        await BankIo.listJsonFiles(root.path);
+    final List<QuestionBankFile> files = await BankIo.listJsonFiles(root.path);
 
-    expect(files.map((QuestionBankFile file) => file.name), <String>['根题库.json']);
+    expect(files.map((QuestionBankFile file) => file.name), <String>[
+      '根题库.json',
+    ]);
     expect(files.single.subDirectory, '');
     expect(files.single.sourceDirectoryRef, root.path);
   });
@@ -58,8 +59,9 @@ void main() {
       recursive: true,
     );
 
-    final List<String> names =
-        files.map((QuestionBankFile file) => file.displayPath).toList();
+    final List<String> names = files
+        .map((QuestionBankFile file) => file.displayPath)
+        .toList();
     expect(names, containsAll(<String>['根题库', '线代/第一章']));
     expect(names.any((String name) => name.contains('更深')), isFalse);
     expect(names.any((String name) => name.contains('隐藏')), isFalse);

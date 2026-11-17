@@ -253,11 +253,7 @@ ${studentAnswer.isEmpty ? '' : '\n学生作答：$studentAnswer'}
     }
 
     final String text = await _send(
-      _withImages(
-        trimmed,
-        answerImages: images,
-        answerImagesLabel: '附图',
-      ),
+      _withImages(trimmed, answerImages: images, answerImagesLabel: '附图'),
       stream: false,
       thinking: false,
     );
@@ -489,11 +485,7 @@ $rules
 ''';
 
     final String raw = await _send(
-      _withImages(
-        prompt,
-        answerImages: valid,
-        answerImagesLabel: '用户拍摄的图片',
-      ),
+      _withImages(prompt, answerImages: valid, answerImagesLabel: '用户拍摄的图片'),
       stream: false,
       thinking: false,
       timeout: _defaultTimeout,

@@ -4,22 +4,20 @@ import 'package:tbank/screen/practice_controller.dart';
 import 'package:tbank/services/practice_progress.dart';
 
 Question _question(String id) => Question(
-      id: id,
-      type: QuestionType.singleChoice,
-      question: id,
-      options: const <QuestionOption>[
-        QuestionOption(key: 'A', text: 'A'),
-        QuestionOption(key: 'B', text: 'B'),
-      ],
-      correctAnswers: const <String>['A'],
-      stats: QuestionStats(),
-    );
+  id: id,
+  type: QuestionType.singleChoice,
+  question: id,
+  options: const <QuestionOption>[
+    QuestionOption(key: 'A', text: 'A'),
+    QuestionOption(key: 'B', text: 'B'),
+  ],
+  correctAnswers: const <String>['A'],
+  stats: QuestionStats(),
+);
 
 PracticeController _controller() => PracticeController(
-      bank: QuestionBank(
-        questions: <Question>[_question('q_1'), _question('q_2')],
-      ),
-    );
+  bank: QuestionBank(questions: <Question>[_question('q_1'), _question('q_2')]),
+);
 
 void main() {
   test('record 记录计数与选择，重复提交不再计数', () {
@@ -83,9 +81,7 @@ void main() {
     );
 
     controller.loadBank(
-      QuestionBank(
-        questions: <Question>[_question('q_1'), _question('q_2')],
-      ),
+      QuestionBank(questions: <Question>[_question('q_1'), _question('q_2')]),
       progress,
     );
 

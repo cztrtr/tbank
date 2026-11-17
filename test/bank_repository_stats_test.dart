@@ -71,8 +71,9 @@ void main() {
     );
 
     final List<QuestionBankFile> files = await BankIo.listJsonFiles(temp.path);
-    final Map<String, BankStat> stats = await BankRepository.instance
-        .loadStats(files);
+    final Map<String, BankStat> stats = await BankRepository.instance.loadStats(
+      files,
+    );
 
     final BankStat stat = stats[bank.path]!;
     expect(stat.questionCount, 2);

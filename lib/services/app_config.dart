@@ -304,10 +304,7 @@ class AppConfig {
       // 把 Key 重新写回安全存储并恢复状态，保证「清除失败」名副其实。
       if (previousKey != null) {
         try {
-          await _instance._secretStore.write(
-            SecretKeys.dsApiKey,
-            previousKey,
-          );
+          await _instance._secretStore.write(SecretKeys.dsApiKey, previousKey);
           _instance._dsApiKey = previousKey;
           _instance._dsKeyStatus = previousStatus;
         } on SecretStoreException {
@@ -453,8 +450,7 @@ class AppConfig {
 
       if (data != null) {
         _applyConfig(data);
-        _expectedSecureKey =
-            data['dsApiKeyStorage']?.toString() == 'secure';
+        _expectedSecureKey = data['dsApiKeyStorage']?.toString() == 'secure';
         final String? legacy = _decodeApiKey(data['dsApiKey']);
         await _loadApiKey(legacy);
       } else {
@@ -502,10 +498,7 @@ class AppConfig {
 
     final penDoubleTapMs = data['penDoubleTapMs'];
     _penDoubleTapMs = penDoubleTapMs is num
-        ? penDoubleTapMs
-              .toInt()
-              .clamp(penDoubleTapMin, penDoubleTapMax)
-              .toInt()
+        ? penDoubleTapMs.toInt().clamp(penDoubleTapMin, penDoubleTapMax).toInt()
         : penDoubleTapDefault;
     _penOnlyInput = data['penOnlyInput'] == true;
     final penWidth = data['penScratchWidth'];
@@ -515,9 +508,7 @@ class AppConfig {
               .clamp(penScratchWidthMin, penScratchWidthMax)
               .toDouble()
         : penScratchWidthDefault;
-    _penEraserMode = data['penEraserMode'] == 'stroke'
-        ? 'stroke'
-        : 'pixel';
+    _penEraserMode = data['penEraserMode'] == 'stroke' ? 'stroke' : 'pixel';
     _penGrid = data['penGrid'] != false;
     final collapsedGroups = data['collapsedManagerGroups'];
     _collapsedManagerGroups = collapsedGroups is List

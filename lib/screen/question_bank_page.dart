@@ -319,9 +319,12 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
                 ),
                 onChanged: (String value) {
                   _searchDebounce?.cancel();
-                  _searchDebounce = Timer(const Duration(milliseconds: 250), () {
-                    if (mounted) setState(() => _query = value);
-                  });
+                  _searchDebounce = Timer(
+                    const Duration(milliseconds: 250),
+                    () {
+                      if (mounted) setState(() => _query = value);
+                    },
+                  );
                 },
               )
             : const Text('管理'), // 左上角标题
@@ -450,9 +453,19 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
 
         // 按题库所在文件夹分组：文件夹名在上方，题库缩进列在下面
         Expanded(
-          child: ListView(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
-            children: _buildGroupedList(colorScheme, files),
+          child: Builder(
+            builder: (BuildContext context) {
+              final List<WidgetBuilder> rows = _buildGroupedList(
+                colorScheme,
+                files,
+              );
+              return ListView.builder(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+                itemCount: rows.length,
+                itemBuilder: (BuildContext context, int index) =>
+                    rows[index](context),
+              );
+            },
           ),
         ),
       ],
@@ -554,7 +567,11 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
   ///
   /// 递归扫描到的一层子目录不拼在文件名里，而是作为「添加的文件夹」下面的
   /// 小标题；题库按钮只显示最终文件名。
-  List<Widget> _buildGroupedList(
+  /// 返回一组「按需构建」的行。
+  ///
+  /// ListView.builder 只会调用可见行的 builder，题库很多时不会一次性
+  /// 创建所有按钮/图标；分组计算本身仍然很轻。
+  List<WidgetBuilder> _buildGroupedList(
     ColorScheme colorScheme,
     List<QuestionBankFile> visibleFiles,
   ) {
@@ -588,14 +605,14 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
           .add(file);
     }
 
-    final List<Widget> children = <Widget>[];
+    final List<WidgetBuilder> children = <WidgetBuilder>[];
 
     for (final MapEntry<String, Map<String, List<QuestionBankFile>>> parent
         in tree.entries) {
       final bool isVirtual = virtualParents.contains(parent.key);
       final String parentGroupKey = 'p:${parent.key}';
       children.add(
-        _buildCollapsibleHeader(
+        (BuildContext context) => _buildCollapsibleHeader(
           groupKey: parentGroupKey,
           icon: Icons.folder_open_outlined,
           label: parentLabels[parent.key]!,
@@ -617,7 +634,7 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
         // 子文件夹标题：没有父级时省略，避免和父标题重复
         if (!isVirtual) {
           children.add(
-            _buildCollapsibleHeader(
+            (BuildContext context) => _buildCollapsibleHeader(
               groupKey: childGroupKey,
               icon: Icons.folder_outlined,
               label: BankIo.displayNameOf(child.key),
@@ -664,7 +681,7 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
           // 子目录标题：例如「组织学」下面的「1_组织学绪论」
           if (subDirectory.isNotEmpty) {
             children.add(
-              _buildCollapsibleHeader(
+              (BuildContext context) => _buildCollapsibleHeader(
                 groupKey: subGroupKey,
                 icon: Icons.folder_outlined,
                 label: subDirectory,
@@ -680,7 +697,7 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
 
           for (final QuestionBankFile file in bySubDirectory[subDirectory]!) {
             children.add(
-              Padding(
+              (BuildContext context) => Padding(
                 padding: EdgeInsets.only(
                   left: isVirtual
                       ? (subDirectory.isEmpty ? 12 : 26)
@@ -762,5 +779,3 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
     return children;
   }
 }
-
-

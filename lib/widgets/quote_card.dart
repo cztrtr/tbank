@@ -16,10 +16,7 @@ import 'package:flutter/services.dart';
 /// - 点击卡片换下一句，且不会连续两次显示同一句；
 /// - 只有一句、或文件加载失败时点击无效果，卡片会隐藏。
 class QuoteCard extends StatefulWidget {
-  const QuoteCard({
-    super.key,
-    this.assetPath = 'assets/texts/quotes.txt',
-  });
+  const QuoteCard({super.key, this.assetPath = 'assets/texts/quotes.txt'});
 
   /// 文字资源路径，必须已在 pubspec.yaml 的 assets 里声明。
   final String assetPath;
@@ -111,18 +108,19 @@ class _QuoteCardState extends State<QuoteCard> {
                   duration: const Duration(milliseconds: 260),
                   switchInCurve: Curves.easeOut,
                   switchOutCurve: Curves.easeIn,
-                  transitionBuilder: (Widget child, Animation<double> animation) {
-                    return FadeTransition(
-                      opacity: animation,
-                      child: SlideTransition(
-                        position: Tween<Offset>(
-                          begin: const Offset(0, 0.15),
-                          end: Offset.zero,
-                        ).animate(animation),
-                        child: child,
-                      ),
-                    );
-                  },
+                  transitionBuilder:
+                      (Widget child, Animation<double> animation) {
+                        return FadeTransition(
+                          opacity: animation,
+                          child: SlideTransition(
+                            position: Tween<Offset>(
+                              begin: const Offset(0, 0.15),
+                              end: Offset.zero,
+                            ).animate(animation),
+                            child: child,
+                          ),
+                        );
+                      },
                   child: Text(
                     text,
                     key: ValueKey<String>(text),

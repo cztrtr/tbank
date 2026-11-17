@@ -66,7 +66,9 @@ class PracticePersistence {
 
     try {
       await storage.save(bank);
-      if (bank.questions.any((Question question) => question.isFromMistakeBook)) {
+      if (bank.questions.any(
+        (Question question) => question.isFromMistakeBook,
+      )) {
         await storage.syncBack();
       }
     } catch (error) {
@@ -104,8 +106,9 @@ class PracticePersistence {
         answeredCount: answeredCount,
         correctCount: correctCount,
         answers: Map<int, ({bool correct, Set<String> selected})>.of(answers),
-        questionIds:
-            bank.questions.map((Question question) => question.id).toList(),
+        questionIds: bank.questions
+            .map((Question question) => question.id)
+            .toList(),
       ),
     );
   }

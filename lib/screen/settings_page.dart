@@ -86,9 +86,7 @@ class _SettingsPageState extends State<SettingsPage> {
       } else {
         // 失败时不回填 Key，也不假装成功；提示优先使用安全存储给出的原因。
         final String reason =
-            AppConfig.dsApiKeyWarning ??
-            AppConfig.lastSaveError ??
-            '系统安全存储不可用';
+            AppConfig.dsApiKeyWarning ?? AppConfig.lastSaveError ?? '系统安全存储不可用';
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text('未保存：$reason')));
       }
@@ -275,9 +273,11 @@ class _SettingsPageState extends State<SettingsPage> {
           ValueListenableBuilder<DsApiKeyStatus>(
             valueListenable: AppConfig.dsApiKeyStatusNotifier,
             builder: (BuildContext context, DsApiKeyStatus status, _) {
-              final (IconData icon, Color color, String label) = switch (
-                status
-              ) {
+              final (
+                IconData icon,
+                Color color,
+                String label,
+              ) = switch (status) {
                 DsApiKeyStatus.secure => (
                   Icons.check_circle,
                   colorScheme.primary,
