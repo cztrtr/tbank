@@ -230,119 +230,126 @@ class _HomePageState extends State<HomePage> {
                     filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
                     child: Container(
                       color: colorScheme.surface.withValues(alpha: 0.55),
-                      child: InkWell(
-                        // 整个圆角正方形都可点击；今天已打过或刚打完则禁用
-                        onTap: (_checkInDone || _alreadyCheckedToday)
-                            ? null
-                            : _handleCheckIn,
-                        child: Padding(
-                          padding: const EdgeInsets.all(18),
-                          child: Center(
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: CrossAxisAlignment.center,
-                              children: <Widget>[
-                                // 打卡 -> HELLO，带淡入和轻微缩放
-                                AnimatedSwitcher(
-                                  duration: const Duration(milliseconds: 260),
-                                  transitionBuilder: (child, animation) {
-                                    final scale =
-                                        Tween<double>(
-                                          begin: 0.92,
-                                          end: 1,
-                                        ).animate(
-                                          CurvedAnimation(
-                                            parent: animation,
-                                            curve: Curves.easeOutCubic,
-                                          ),
-                                        );
-                                    return FadeTransition(
-                                      opacity: animation,
-                                      child: ScaleTransition(
-                                        scale: scale,
-                                        alignment: Alignment.center,
-                                        child: child,
+                      child: Semantics(
+                        button: true,
+                        label: _title,
+                        child: InkWell(
+                          // 整个圆角正方形都可点击；今天已打过或刚打完则禁用
+                          onTap: (_checkInDone || _alreadyCheckedToday)
+                              ? null
+                              : _handleCheckIn,
+                          child: Padding(
+                            padding: const EdgeInsets.all(18),
+                            child: Center(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.center,
+                                children: <Widget>[
+                                  // 打卡 -> HELLO，带淡入和轻微缩放
+                                  AnimatedSwitcher(
+                                    duration: const Duration(milliseconds: 260),
+                                    transitionBuilder: (child, animation) {
+                                      final scale =
+                                          Tween<double>(
+                                            begin: 0.92,
+                                            end: 1,
+                                          ).animate(
+                                            CurvedAnimation(
+                                              parent: animation,
+                                              curve: Curves.easeOutCubic,
+                                            ),
+                                          );
+                                      return FadeTransition(
+                                        opacity: animation,
+                                        child: ScaleTransition(
+                                          scale: scale,
+                                          alignment: Alignment.center,
+                                          child: child,
+                                        ),
+                                      );
+                                    },
+                                    child: Text(
+                                      _title,
+                                      key: ValueKey<String>(_title),
+                                      style: TextStyle(
+                                        fontSize: 30,
+                                        fontWeight: FontWeight.w800,
+                                        letterSpacing: 2,
+                                        color:
+                                            (_checkInDone ||
+                                                _alreadyCheckedToday)
+                                            ? colorScheme.primary
+                                            : colorScheme.onSurface,
                                       ),
-                                    );
-                                  },
-                                  child: Text(
-                                    _title,
-                                    key: ValueKey<String>(_title),
-                                    style: TextStyle(
-                                      fontSize: 30,
-                                      fontWeight: FontWeight.w800,
-                                      letterSpacing: 2,
-                                      color:
-                                          (_checkInDone || _alreadyCheckedToday)
-                                          ? colorScheme.primary
-                                          : colorScheme.onSurface,
                                     ),
                                   ),
-                                ),
 
-                                // “已经打卡 xx 天” 点击后高度收缩并淡出
-                                AnimatedSwitcher(
-                                  duration: const Duration(milliseconds: 260),
-                                  switchInCurve: Curves.easeOut,
-                                  switchOutCurve: Curves.easeIn,
-                                  transitionBuilder: (child, animation) {
-                                    return SizeTransition(
-                                      sizeFactor: animation,
-                                      alignment: Alignment.center,
-                                      child: FadeTransition(
-                                        opacity: animation,
-                                        child: child,
-                                      ),
-                                    );
-                                  },
-                                  child: _checkInDone
-                                      ? const SizedBox(
-                                          key: ValueKey<String>('count-hidden'),
-                                        )
-                                      : ValueListenableBuilder<int>(
-                                          key: const ValueKey<String>(
-                                            'count-visible',
-                                          ),
-                                          valueListenable:
-                                              AppConfig.clockOnNotifier,
-                                          builder: (context, clockOn, _) {
-                                            return Padding(
-                                              padding: const EdgeInsets.only(
-                                                top: 4,
-                                              ),
-                                              child: Text(
-                                                '已经打卡 $clockOn 天',
-                                                textAlign: TextAlign.center,
-                                                style: TextStyle(
-                                                  fontSize: 14,
-                                                  color: colorScheme
-                                                      .onSurfaceVariant,
-                                                ),
-                                              ),
-                                            );
-                                          },
+                                  // “已经打卡 xx 天” 点击后高度收缩并淡出
+                                  AnimatedSwitcher(
+                                    duration: const Duration(milliseconds: 260),
+                                    switchInCurve: Curves.easeOut,
+                                    switchOutCurve: Curves.easeIn,
+                                    transitionBuilder: (child, animation) {
+                                      return SizeTransition(
+                                        sizeFactor: animation,
+                                        alignment: Alignment.center,
+                                        child: FadeTransition(
+                                          opacity: animation,
+                                          child: child,
                                         ),
-                                ),
-
-                                const SizedBox(height: 10),
-
-                                // 日期：点击后稍微放大并变色
-                                AnimatedDefaultTextStyle(
-                                  duration: const Duration(milliseconds: 320),
-                                  curve: Curves.easeOutCubic,
-                                  style: TextStyle(
-                                    fontSize: _checkInDone ? 22 : 14,
-                                    fontWeight: _checkInDone
-                                        ? FontWeight.w700
-                                        : FontWeight.w500,
-                                    letterSpacing: _checkInDone ? 1.2 : 0,
-                                    color: _checkInDone
-                                        ? colorScheme.primary
-                                        : colorScheme.onSurfaceVariant,
+                                      );
+                                    },
+                                    child: _checkInDone
+                                        ? const SizedBox(
+                                            key: ValueKey<String>(
+                                              'count-hidden',
+                                            ),
+                                          )
+                                        : ValueListenableBuilder<int>(
+                                            key: const ValueKey<String>(
+                                              'count-visible',
+                                            ),
+                                            valueListenable:
+                                                AppConfig.clockOnNotifier,
+                                            builder: (context, clockOn, _) {
+                                              return Padding(
+                                                padding: const EdgeInsets.only(
+                                                  top: 4,
+                                                ),
+                                                child: Text(
+                                                  '已经打卡 $clockOn 天',
+                                                  textAlign: TextAlign.center,
+                                                  style: TextStyle(
+                                                    fontSize: 14,
+                                                    color: colorScheme
+                                                        .onSurfaceVariant,
+                                                  ),
+                                                ),
+                                              );
+                                            },
+                                          ),
                                   ),
-                                  child: Text(_dateText),
-                                ),
-                              ],
+
+                                  const SizedBox(height: 10),
+
+                                  // 日期：点击后稍微放大并变色
+                                  AnimatedDefaultTextStyle(
+                                    duration: const Duration(milliseconds: 320),
+                                    curve: Curves.easeOutCubic,
+                                    style: TextStyle(
+                                      fontSize: _checkInDone ? 22 : 14,
+                                      fontWeight: _checkInDone
+                                          ? FontWeight.w700
+                                          : FontWeight.w500,
+                                      letterSpacing: _checkInDone ? 1.2 : 0,
+                                      color: _checkInDone
+                                          ? colorScheme.primary
+                                          : colorScheme.onSurfaceVariant,
+                                    ),
+                                    child: Text(_dateText),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
                         ),

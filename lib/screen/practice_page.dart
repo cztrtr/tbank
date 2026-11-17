@@ -359,14 +359,11 @@ class _PracticePageState extends State<PracticePage>
   /// 这题如果已经答过，恢复当时的判分结果和选择，让它变成只读的回顾状态：
   /// 不再出现提交按钮，因此不会重复计数、也不会改动原题库的统计。
   void _goTo(int index) {
-    final answered = _answeredStates[index];
-
     setState(() {
       _resetQuestionState();
       _controller.goTo(index);
     });
     // answered 由 controller.goTo 恢复，供 host 显示只读回顾状态。
-    if (answered != null) _aiFallback = false;
 
     // 切题即记下断点，下次打开能停在这一题
     unawaited(_saveProgress());
