@@ -1,9 +1,11 @@
 {
   "id": "cpp",
   "name": "C/C++ 代码题",
-  "version": "1.0.0",
-  "apiVersion": 1,
+  "version": "1.1.0",
+  "apiVersion": 2,
   "description": "面向大一程序设计课程的 C/C++ 题型：代码阅读、代码填空、上机编程。手机端只读作答，平板/PC 提供带行号的编辑器，交 AI 按入门课标准判分。",
+  "capabilities": ["ai", "config", "toast"],
+  "networkHosts": [],
   "types": ["cpp_read", "cpp_fill", "cpp_ide"],
   "typeNames": {
     "cpp_read": "C/C++ 代码阅读",

@@ -1,3 +1,12 @@
+// 宿主切到其它 tab 时调用；插件可据此暂停计时器/渲染。
+window.__tbankPaused = false;
+window.__tbankPause = function () {
+  window.__tbankPaused = true;
+};
+window.__tbankResume = function () {
+  window.__tbankPaused = false;
+};
+
 (function () {
   'use strict';
 

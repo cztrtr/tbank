@@ -1,11 +1,16 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show AssetManifest, rootBundle;
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
+
+import 'atomic_write.dart';
+import 'ref_hash.dart';
 
 /// 插件清单失败时抛出，[message] 可直接展示给用户。
 class PluginException implements Exception {
@@ -56,6 +61,8 @@ class PluginManifest {
     this.typeDescriptions = const <String, String>{},
     this.typeSchemas = const <String, Map<String, dynamic>>{},
     this.typeExamples = const <String, Map<String, dynamic>>{},
+    this.capabilities = const <String>{},
+    this.networkHosts = const <String>[],
     this.builtin = false,
   });
 
@@ -75,7 +82,23 @@ class PluginManifest {
   /// 题型 id → `pluginData` 的 JSON Schema / 示例。
   final Map<String, Map<String, dynamic>> typeSchemas;
   final Map<String, Map<String, dynamic>> typeExamples;
+
+  /// apiVersion 2 起生效的高风险能力声明。
+  ///
+  /// 可选值：`ai`、`pickImage`、`pen`、`readBank`、`fetch`、`clipboard`、
+  /// `config`、`toast`。v1 旧插件不声明时按全量放行，保证兼容。
+  final Set<String> capabilities;
+
+  /// `tbankFetch` 允许访问的域名；空列表表示拒绝所有网络请求。
+  ///
+  /// 支持精确域名（`api.example.com`）和子域后缀（`.example.com`）。
+  final List<String> networkHosts;
+
   final bool builtin;
+
+  /// apiVersion 2 的插件是否声明了某个高风险能力；v1 保持旧行为。
+  bool allows(String capability) =>
+      apiVersion < 2 || capabilities.contains(capability);
 
   /// 按 manifest 的 types 顺序生成题型信息。
   List<PluginTypeInfo> get typeInfos => types
@@ -125,6 +148,22 @@ class PluginManifest {
               .toList()
         : <String>[];
     if (types.isEmpty) throw const PluginException('插件没有声明可处理的题目类型');
+
+    final dynamic rawCapabilities = json['capabilities'];
+    final Set<String> capabilities = rawCapabilities is List
+        ? rawCapabilities
+              .map((dynamic item) => item.toString().trim())
+              .where((String item) => item.isNotEmpty)
+              .toSet()
+        : <String>{};
+
+    final dynamic rawHosts = json['networkHosts'];
+    final List<String> networkHosts = rawHosts is List
+        ? rawHosts
+              .map((dynamic item) => item.toString().trim().toLowerCase())
+              .where((String item) => item.isNotEmpty)
+              .toList()
+        : <String>[];
 
     Map<String, String> readStringMap(String key) {
       final dynamic raw = json[key];
@@ -184,6 +223,8 @@ class PluginManifest {
       typeDescriptions: readStringMap('typeDescriptions'),
       typeSchemas: schemas,
       typeExamples: examples,
+      capabilities: capabilities,
+      networkHosts: networkHosts,
       builtin: builtin,
     );
   }
@@ -199,6 +240,8 @@ class PluginManifest {
     if (typeDescriptions.isNotEmpty) 'typeDescriptions': typeDescriptions,
     if (typeSchemas.isNotEmpty) 'typeSchemas': typeSchemas,
     if (typeExamples.isNotEmpty) 'typeExamples': typeExamples,
+    if (capabilities.isNotEmpty) 'capabilities': capabilities.toList()..sort(),
+    if (networkHosts.isNotEmpty) 'networkHosts': networkHosts,
     'builtin': builtin,
   };
 }
@@ -222,8 +265,9 @@ class PluginManager {
   static const String manifestName = 'manifest.json';
   static const String configPageName = 'config.html';
   static const String configFileName = 'config.json';
-  static const int supportedApiVersion = 1;
+  static const int supportedApiVersion = 2;
   static const int _maxZipBytes = 20 * 1024 * 1024;
+  static const int _maxUncompressedBytes = 100 * 1024 * 1024;
   static const int _maxFiles = 500;
   static const int _maxConfigBytes = 256 * 1024;
 
@@ -259,11 +303,31 @@ class PluginManager {
     return dir;
   }
 
+  /// 内置插件同步的共享 Future，避免启动时和页面同时触发多轮写盘。
+  static Future<void>? _builtinInFlight;
+
+  /// 内置插件同步标记文件名（每次成功同步后写入版本+资源列表哈希）。
+  static const String _syncMarkerName = '.builtin-sync.json';
+
   /// 把随包发布的全部内置插件资源同步到插件目录。
   ///
   /// 用 AssetManifest 列出 `assets/plugins/<id>/` 下所有文件（含 KaTeX
   /// 字体），按二进制原样写入；内置插件和第三方插件走同一套 WebView 协议。
-  static Future<void> ensureBuiltin() async {
+  ///
+  /// 同步前先检查 `.builtin-sync.json`：版本和资源列表都没变时直接跳过，
+  /// 避免每次启动/每次打开插件页都重写约 7 MB 的字体和 KaTeX。
+  static Future<void> ensureBuiltin() {
+    final Future<void>? existing = _builtinInFlight;
+    if (existing != null) return existing;
+
+    final Future<void> future = _ensureBuiltinInner();
+    _builtinInFlight = future;
+    return future.whenComplete(() {
+      if (identical(_builtinInFlight, future)) _builtinInFlight = null;
+    });
+  }
+
+  static Future<void> _ensureBuiltinInner() async {
     final Directory dir = await directory();
     final AssetManifest manifest;
     try {
@@ -322,8 +386,31 @@ class PluginManager {
       }
     }
 
-    for (final String asset in manifest.listAssets()) {
-      if (!asset.startsWith(prefix)) continue;
+    final List<String> assets = manifest
+        .listAssets()
+        .where((String asset) => asset.startsWith(prefix))
+        .toList()
+      ..sort();
+    final String syncSignature = stableRefHash(
+      '${assetManifest.version}|${assets.join('|')}',
+    );
+
+    final File marker = File(
+      '${target.path}${Platform.pathSeparator}$_syncMarkerName',
+    );
+    final File entry = File(
+      '${target.path}${Platform.pathSeparator}index.html',
+    );
+    if (await entry.exists() && await marker.exists()) {
+      try {
+        final String previous = (await marker.readAsString()).trim();
+        if (previous == syncSignature) return; // 已同步且资源未变
+      } catch (error) {
+        debugPrint('读取内置插件同步标记失败：$error');
+      }
+    }
+
+    for (final String asset in assets) {
       final data = await rootBundle.load(asset);
       final String relative = asset.substring(prefix.length);
       final File file = File(
@@ -333,13 +420,22 @@ class PluginManager {
       await file.parent.create(recursive: true);
       await file.writeAsBytes(
         data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
-        flush: true,
+        flush: false,
       );
+    }
+
+    // 全部文件写完后才写标记；中途失败下次会重新同步。
+    try {
+      await marker.writeAsString(syncSignature, flush: true);
+    } catch (error) {
+      debugPrint('写入内置插件同步标记失败：$error');
     }
   }
 
   /// 插件入口 HTML 的绝对路径；没有 index.html 时返回 null。
   static Future<String?> entryFile(String id) async {
+    // 首次使用时确保内置资源已同步（启动同步已移到首帧之后）。
+    await ensureBuiltin();
     final Directory dir = await directory();
     final File entry = File(
       '${dir.path}${Platform.pathSeparator}$id'
@@ -350,6 +446,7 @@ class PluginManager {
 
   /// 插件配置页 `config.html` 的绝对路径；没有配置页时返回 null。
   static Future<String?> configPageFile(String id) async {
+    await ensureBuiltin();
     final Directory dir = await directory();
     final File page = File(
       '${dir.path}${Platform.pathSeparator}$id'
@@ -400,8 +497,10 @@ class PluginManager {
     if (utf8.encode(raw).length > _maxConfigBytes) {
       throw const PluginException('插件配置太大（超过 256 KB）');
     }
-    await File('${target.path}${Platform.pathSeparator}$configFileName')
-        .writeAsString(raw, flush: true);
+    await AtomicWrite.writeText(
+      '${target.path}${Platform.pathSeparator}$configFileName',
+      raw,
+    );
   }
 
   /// 列出已安装插件，内置的排在最前。
@@ -479,6 +578,15 @@ class PluginManager {
     if (archive.length > _maxFiles) {
       throw const PluginException('插件包文件太多（超过 500 个）');
     }
+    // zip bomb 防护：限制解压后的总大小，而不是只看压缩包大小。
+    int uncompressedBytes = 0;
+    for (final ArchiveFile entry in archive) {
+      if (!entry.isFile) continue;
+      uncompressedBytes += entry.size;
+      if (uncompressedBytes > _maxUncompressedBytes) {
+        throw const PluginException('插件包解压后太大（超过 100 MB）');
+      }
+    }
 
     final Directory root = await directory();
     final Directory staging = Directory(
@@ -491,8 +599,12 @@ class PluginManager {
       for (final ArchiveFile entry in archive) {
         if (!entry.isFile) continue;
         final String name = entry.name.replaceAll('\\', '/');
+        // 只拦截真正的路径穿越段；`foo..bar.js` 这类正常文件名不应误伤。
+        final bool hasTraversal = name
+            .split('/')
+            .any((String part) => part == '..' || part.isEmpty);
         if (name.startsWith('/') ||
-            name.contains('..') ||
+            hasTraversal ||
             RegExp(r'^[A-Za-z]:').hasMatch(name)) {
           throw PluginException('插件包包含非法路径：$name');
         }
@@ -579,26 +691,43 @@ class PluginManager {
     } on FormatException {
       throw const PluginException('下载地址格式不正确');
     }
-    if (!uri.hasScheme || (uri.scheme != 'http' && uri.scheme != 'https')) {
-      throw const PluginException('下载地址必须是 http/https');
+    if (!uri.hasScheme || uri.scheme != 'https') {
+      throw const PluginException('插件下载地址必须使用 https');
     }
 
     final http.Client client = http.Client();
     try {
-      final http.Response response = await client
-          .get(uri)
+      final http.Request request = http.Request('GET', uri);
+      final http.StreamedResponse response = await client
+          .send(request)
           .timeout(const Duration(seconds: 60));
       if (response.statusCode != 200) {
         throw PluginException('下载失败（HTTP ${response.statusCode}）');
       }
-      if (response.bodyBytes.length > _maxZipBytes) {
+      if (response.contentLength != null &&
+          response.contentLength! > _maxZipBytes) {
         throw const PluginException('插件包太大（超过 20 MB）');
       }
-      return await importZipBytes(response.bodyBytes);
+
+      // 边下边计数：服务器不给 Content-Length 时也不会先把超大包读进内存。
+      final BytesBuilder builder = BytesBuilder(copy: false);
+      int received = 0;
+      await for (final List<int> chunk in response.stream.timeout(
+        const Duration(seconds: 60),
+      )) {
+        received += chunk.length;
+        if (received > _maxZipBytes) {
+          throw const PluginException('插件包太大（超过 20 MB）');
+        }
+        builder.add(chunk);
+      }
+      return await importZipBytes(builder.takeBytes());
     } on PluginException {
       rethrow;
     } on http.ClientException catch (error) {
       throw PluginException('网络请求失败：${error.message}');
+    } on TimeoutException {
+      throw const PluginException('下载超时，请检查网络后重试');
     } catch (error) {
       throw PluginException('下载失败：$error');
     } finally {

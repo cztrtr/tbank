@@ -25,18 +25,19 @@ Future<void> main() async {
 
   // 正式包启用插件运行时；widget 测试默认关闭，继续用原生练习页
   PluginRuntime.enabled = true;
-  try {
-    await PluginManager.ensureBuiltin();
-  } catch (error) {
-    debugPrint('同步内置插件失败：$error');
-  }
 
   runApp(const MainApp()); // 配置就绪后再启动界面
 
-  // 历史题库 id 迁移：老用户第一次升级时要读一遍所有题库文件，
-  // 放在 runApp 之前会让启动白屏。迁移内部有一次性标记，
-  // 正常启动只做一次文件存在性检查；并发调用共享同一个 Future。
+  // 内置插件同步和历史题库 id 迁移都放到首帧之后：
+  // - 首次启动要解压约 7 MB 字体/KaTeX，放在 runApp 前会白屏；
+  // - 插件页/练习页第一次使用时会 await 同一个 Future（见 PluginManager）。
+  // 迁移内部有一次性标记，正常启动只做一次文件存在性检查。
   WidgetsBinding.instance.addPostFrameCallback((_) {
+    unawaited(
+      PluginManager.ensureBuiltin().catchError((Object error) {
+        debugPrint('同步内置插件失败：$error');
+      }),
+    );
     unawaited(MistakeBooks.migrateAllBankIds());
   });
 }

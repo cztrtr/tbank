@@ -32,10 +32,13 @@ import '../services/plugin_runtime.dart';
 /// - 当前题：_index / _selected / _showAnswer / _answered / _wasCorrect；
 /// - 整份进度：_finished / _answeredCount / _correctCount / _syncMessage。
 class PracticePage extends StatefulWidget {
-  const PracticePage({super.key, this.bank});
+  const PracticePage({super.key, this.bank, this.active = true});
 
   /// 从题库管理页选中的题库文件；null 表示还没选。
   final QuestionBankFile? bank;
+
+  /// 当前练习 tab 是否可见；切到其它 tab 时通知插件暂停计时器/渲染。
+  final bool active;
 
   @override
   State<PracticePage> createState() => _PracticePageState();
@@ -203,6 +206,8 @@ class _PracticePageState extends State<PracticePage>
         return;
       }
 
+      // 第三方插件读取 manifest，用于 v2 capabilities 校验；内置 standard
+      // 直接信任（也避免在 widget 测试里为它同步 7 MB 资源）。
       final PluginManifest? manifest = pluginId == PluginManager.builtinId
           ? null
           : await _findPluginManifest(pluginId);
@@ -620,11 +625,12 @@ class _PracticePageState extends State<PracticePage>
         selected: _selected,
         mistakeScore: question.mistakeScore,
         isMistakeDone: question.isMistakeDone,
-        aiEnabled: !_aiFallback && (AppConfig.dsApiKey ?? '').trim().isNotEmpty,
+        aiEnabled: !_aiFallback && AppConfig.hasDsApiKey,
         correctAnswerText: _answerText(question),
         sourceDirectoryRef: _storage?.sourceDirectoryRef,
         bankFile: widget.bank,
         plugin: _pluginManifest,
+        active: widget.active,
         onSubmit: (bool correct, Set<String> selected) {
           setState(() {
             _selected
@@ -636,7 +642,7 @@ class _PracticePageState extends State<PracticePage>
         onNext: _next,
         onPrevious: _previous,
         onRequestAiExplain: (String answer) async {
-          if ((AppConfig.dsApiKey ?? '').trim().isEmpty) {
+          if (!AppConfig.hasDsApiKey) {
             return '未配置 DeepSeek API Key，请先到设置里填写。';
           }
           try {
@@ -654,7 +660,7 @@ class _PracticePageState extends State<PracticePage>
           }
         },
         onRequestAiScore: (String answer, List<Uint8List> images) async {
-          if ((AppConfig.dsApiKey ?? '').trim().isEmpty) {
+          if (!AppConfig.hasDsApiKey) {
             throw DsApiException('未配置 DeepSeek API Key');
           }
           return PracticeAiService.score(
@@ -665,7 +671,7 @@ class _PracticePageState extends State<PracticePage>
           );
         },
         onRequestAiComplete: (String prompt, List<Uint8List> images) async {
-          if ((AppConfig.dsApiKey ?? '').trim().isEmpty) {
+          if (!AppConfig.hasDsApiKey) {
             throw DsApiException('未配置 DeepSeek API Key');
           }
           return PracticeAiService.complete(prompt: prompt, images: images);
@@ -677,8 +683,8 @@ class _PracticePageState extends State<PracticePage>
           setState(() {
             current.pluginData = Map<String, dynamic>.from(data);
           });
+          // 走 400ms 防抖；插件频繁回写（手写/草稿）时不再每次都整份落盘。
           _schedulePersist();
-          await _flushPersist();
         },
       );
     }
@@ -692,7 +698,7 @@ class _PracticePageState extends State<PracticePage>
       wasCorrect: _wasCorrect,
       showAnswer: _showAnswer,
       grading: _grading,
-      aiEnabled: !_aiFallback && (AppConfig.dsApiKey ?? '').trim().isNotEmpty,
+      aiEnabled: !_aiFallback && AppConfig.hasDsApiKey,
       aiScore: _aiScore,
       aiAnalysisLoading: _aiAnalysisLoading,
       aiAnalysis: _aiAnalysis,

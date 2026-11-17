@@ -12,7 +12,7 @@
 
 ## 安装
 
-1. 直接使用本目录下的 `cpp-1.0.0.zip`（`manifest.json` 在 zip 根目录）
+1. 直接使用本目录下的 `cpp-1.1.0.zip`（`manifest.json` 在 zip 根目录）
 2. tbank → 设置 → 插件管理 → 导入本地 zip
 3. 新建题库时选择题型「C/C++ 编程题」，或按下方格式手写题库
 
@@ -112,3 +112,10 @@ style.css       样式（跟随 App 主题）
 ```bash
 node test/core.test.js
 ```
+
+## 版本
+
+- 插件版本：`1.1.0`
+- 插件 API：`2`（capabilities：`ai` / `config` / `toast`；不联网）
+- 适配：切到其它 tab 时宿主调用 `__tbankPause()` / `__tbankResume()`
+- 安装包：`cpp-1.1.0.zip`

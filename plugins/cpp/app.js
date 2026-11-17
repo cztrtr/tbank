@@ -1,3 +1,12 @@
+// 宿主切到其它 tab 时调用；当前题型没有常驻定时器，保留钩子便于以后扩展。
+window.__tbankPaused = false;
+window.__tbankPause = function () {
+  window.__tbankPaused = true;
+};
+window.__tbankResume = function () {
+  window.__tbankPaused = false;
+};
+
 (function () {
   'use strict';
 

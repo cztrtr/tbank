@@ -89,11 +89,21 @@ class _MainScreenState extends State<MainScreen> {
     // 每次重建都把最新的选中题库传给 PracticePage，
     // 这样题库页 emit 新选择后，练习页能通过 didUpdateWidget 感知。
     // 页面实例在这里重新创建，但 IndexedStack 会按位置复用各自的 State。
+    // 非当前 tab 关闭 Ticker，暂停 Flutter 动画；练习页额外把 active
+    // 传给插件 WebView，让插件停掉计时器/手写渲染。
+    Widget tab(int index, Widget child) =>
+        TickerMode(enabled: _currentIndex == index, child: child);
     final pages = <Widget>[
-      const HomePage(),
-      QuestionBankPage(onOpenBank: _openBank),
-      PracticePage(bank: _selectedBank),
-      const MePage(),
+      tab(0, const HomePage()),
+      tab(1, QuestionBankPage(onOpenBank: _openBank)),
+      tab(
+        2,
+        PracticePage(
+          bank: _selectedBank,
+          active: _currentIndex == _practiceTabIndex,
+        ),
+      ),
+      tab(3, const MePage()),
     ];
 
     final NavigationBar navigationBar = NavigationBar(

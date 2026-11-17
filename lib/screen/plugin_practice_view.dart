@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
+import 'package:path/path.dart' as p;
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_windows/webview_windows.dart';
 
@@ -40,6 +41,7 @@ class PluginPracticeView extends StatefulWidget {
     required this.sourceDirectoryRef,
     required this.bankFile,
     required this.plugin,
+    this.active = true,
     required this.onSubmit,
     required this.onNext,
     required this.onPrevious,
@@ -63,6 +65,9 @@ class PluginPracticeView extends StatefulWidget {
   final String? sourceDirectoryRef;
   final QuestionBankFile? bankFile;
   final PluginManifest? plugin;
+
+  /// 当前练习 tab 是否可见；切到其它 tab 时暂停插件计时器/渲染。
+  final bool active;
 
   final void Function(bool correct, Set<String> selected) onSubmit;
   final VoidCallback onNext;
@@ -89,6 +94,21 @@ class _PluginPracticeViewState extends State<PluginPracticeView> {
   bool _pageReady = false;
   StreamSubscription<int>? _penGestureSub;
 
+  /// 插件根目录的绝对路径，用于限制 WebView 只能加载本地插件页面。
+  String? _pluginRoot;
+  String? _windowsEntryUrl;
+  StreamSubscription<String>? _windowsUrlSub;
+
+  /// 上一次推送的 context 签名；父页面 rebuild 但题目/状态没变时跳过。
+  String? _lastPushedSignature;
+
+  /// 切题/连续 setState 时只让最后一次推送生效。
+  int _pushVersion = 0;
+
+  /// 题目配图 data URL 缓存。题目 id + 文件名不变时复用，避免重复读盘/base64。
+  String? _cachedImageKey;
+  String? _cachedImageDataUrl;
+
   @override
   void initState() {
     super.initState();
@@ -106,10 +126,37 @@ class _PluginPracticeViewState extends State<PluginPracticeView> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.pluginId != widget.pluginId) {
       _pageReady = false;
+      _lastPushedSignature = null;
       _resolveEntry();
       return;
     }
-    if (_pageReady) _pushContext();
+    if (oldWidget.active != widget.active) {
+      unawaited(_applyActiveState());
+    }
+    // 父页面每次 setState 都会走到这里；_pushContext 内部会先比对签名，
+    // 只有题目/作答/主题等真的变化才读图和执行 JS。
+    if (_pageReady) unawaited(_pushContext());
+  }
+
+  /// 通知插件暂停/恢复（计时器、手写动画等），并尽量挂起 WebView2。
+  Future<void> _applyActiveState() async {
+    if (!_pageReady) return;
+    if (Platform.isWindows) {
+      try {
+        if (widget.active) {
+          await _windowsController?.resume();
+        } else {
+          await _windowsController?.suspend();
+        }
+      } catch (error) {
+        debugPrint('切换插件 WebView 状态失败：$error');
+      }
+    }
+    await _eval(
+      widget.active
+          ? 'window.__tbankResume && window.__tbankResume();'
+          : 'window.__tbankPause && window.__tbankPause();',
+    );
   }
 
   @override
@@ -117,6 +164,7 @@ class _PluginPracticeViewState extends State<PluginPracticeView> {
     _penGestureSub?.cancel();
     _windowsMessage?.cancel();
     _windowsLoading?.cancel();
+    _windowsUrlSub?.cancel();
     _windowsController?.dispose();
     super.dispose();
   }
@@ -130,6 +178,14 @@ class _PluginPracticeViewState extends State<PluginPracticeView> {
       });
       return;
     }
+
+    // 记住插件目录：Android 的 NavigationDelegate 只允许 file:// 且位于
+    // 这个目录下的页面，防止插件跳转到远程站点后继续调用 TBankChannel。
+    _pluginRoot = p.dirname(path);
+    _windowsEntryUrl = Uri.file(path).toString();
+    _lastPushedSignature = null;
+    _cachedImageKey = null;
+    _cachedImageDataUrl = null;
 
     setState(() {
       _error = null;
@@ -154,9 +210,19 @@ class _PluginPracticeViewState extends State<PluginPracticeView> {
         )
         ..setNavigationDelegate(
           NavigationDelegate(
+            onNavigationRequest: (NavigationRequest request) {
+              // 只允许插件目录内的本地页面；外部导航一律阻止，避免远程
+              // 页面继承 TBankChannel 后读取题库/剪贴板/发网络请求。
+              if (_isAllowedNavigation(request.url)) {
+                return NavigationDecision.navigate;
+              }
+              debugPrint('已阻止插件导航：${request.url}');
+              return NavigationDecision.prevent;
+            },
             onPageFinished: (String url) {
               _pageReady = true;
-              _pushContext();
+              unawaited(_pushContext());
+              unawaited(_applyActiveState());
             },
             onWebResourceError: (WebResourceError error) {
               if (error.isForMainFrame == true) {
@@ -178,6 +244,17 @@ class _PluginPracticeViewState extends State<PluginPracticeView> {
       final WebviewController controller = WebviewController();
       await controller.initialize();
       await controller.setBackgroundColor(Colors.transparent);
+      // WebView2 0.4.0 没有导航拦截 API：至少拒绝弹窗，并用 URL 流做看门狗。
+      await controller.setPopupWindowPolicy(WebviewPopupWindowPolicy.deny);
+
+      _windowsUrlSub = controller.url.listen((String url) {
+        if (!_isAllowedNavigation(url)) {
+          debugPrint('已阻止插件导航：$url');
+          unawaited(controller.stop());
+          final String? entry = _windowsEntryUrl;
+          if (entry != null) unawaited(controller.loadUrl(entry));
+        }
+      });
 
       _windowsMessage = controller.webMessage.listen((dynamic message) {
         if (message is String) {
@@ -189,7 +266,8 @@ class _PluginPracticeViewState extends State<PluginPracticeView> {
       _windowsLoading = controller.loadingState.listen((LoadingState state) {
         if (state == LoadingState.none) {
           _pageReady = true;
-          _pushContext();
+          unawaited(_pushContext());
+          unawaited(_applyActiveState());
         }
       });
 
@@ -203,9 +281,29 @@ class _PluginPracticeViewState extends State<PluginPracticeView> {
         if (!mounted || _windowsController != controller) return;
         _pageReady = true;
         unawaited(_pushContext());
+        unawaited(_applyActiveState());
       });
     } catch (error) {
       _setError('插件页面初始化失败：$error');
+    }
+  }
+
+  /// 判断一个 URL 是否允许在插件 WebView 里加载。
+  bool _isAllowedNavigation(String raw) {
+    final Uri? uri = Uri.tryParse(raw);
+    if (uri == null) return false;
+    if (uri.scheme == 'about' || uri.scheme == 'data' || uri.scheme == 'blob') {
+      return true;
+    }
+    if (uri.scheme != 'file') return false;
+    final String? root = _pluginRoot;
+    if (root == null) return false;
+    try {
+      final String path = p.absolute(uri.toFilePath());
+      final String base = p.absolute(root);
+      return path == base || p.isWithin(base, path);
+    } catch (_) {
+      return false;
     }
   }
 
@@ -217,7 +315,20 @@ class _PluginPracticeViewState extends State<PluginPracticeView> {
     });
   }
 
+  /// v2 插件必须显式声明高风险能力；v1 旧插件保持兼容。
+  void _requireCapability(String capability) {
+    final PluginManifest? plugin = widget.plugin;
+    if (plugin != null && !plugin.allows(capability)) {
+      throw PluginException('插件未声明 $capability 能力，已拒绝');
+    }
+  }
+
   Future<void> _handleMessage(String raw) async {
+    // 单条桥消息上限 2 MB；防止插件塞入超大字符串拖垮主 isolate。
+    if (raw.length > 2 * 1024 * 1024) {
+      debugPrint('插件消息过大，已丢弃');
+      return;
+    }
     final dynamic decoded;
     try {
       decoded = jsonDecode(raw);
@@ -250,11 +361,13 @@ class _PluginPracticeViewState extends State<PluginPracticeView> {
           widget.onPrevious();
           break;
         case 'tbankAiExplain':
+          _requireCapability('ai');
           result = await widget.onRequestAiExplain(
             args['answer']?.toString() ?? '',
           );
           break;
         case 'tbankAiScore':
+          _requireCapability('ai');
           final List<Uint8List> images = args['images'] is List
               ? (args['images'] as List)
                     .map((dynamic item) => _decodeDataUrl(item.toString()))
@@ -267,6 +380,7 @@ class _PluginPracticeViewState extends State<PluginPracticeView> {
           );
           break;
         case 'tbankAiComplete':
+          _requireCapability('ai');
           final List<Uint8List> completeImages = args['images'] is List
               ? (args['images'] as List)
                     .map((dynamic item) => _decodeDataUrl(item.toString()))
@@ -280,9 +394,11 @@ class _PluginPracticeViewState extends State<PluginPracticeView> {
           );
           break;
         case 'tbankConfigGet':
+          _requireCapability('config');
           result = await PluginManager.readConfig(widget.pluginId);
           break;
         case 'tbankSetPenSettings':
+          _requireCapability('pen');
           // 手写板参数回传：插件改完笔宽 / 橡皮模式 / 网格后存到 App 配置里，
           // 换题库、换题组都能沿用同一套手感。
           await AppConfig.savePenSettings(
@@ -293,6 +409,7 @@ class _PluginPracticeViewState extends State<PluginPracticeView> {
           result = true;
           break;
         case 'tbankReadBank':
+          _requireCapability('readBank');
           final QuestionBankFile? bankFile = widget.bankFile;
           if (bankFile == null) throw StateError('当前没有题库文件');
           result = await BankIo.readText(bankFile.uri);
@@ -328,23 +445,28 @@ class _PluginPracticeViewState extends State<PluginPracticeView> {
           result = <String, dynamic>{'dataUrl': _dataUrl(bytes)};
           break;
         case 'tbankFetch':
+          _requireCapability('fetch');
           result = await _fetch(args);
           break;
         case 'tbankClipboardRead':
+          _requireCapability('clipboard');
           final ClipboardData? data = await Clipboard.getData(
             Clipboard.kTextPlain,
           );
           result = data?.text ?? '';
           break;
         case 'tbankClipboardWrite':
+          _requireCapability('clipboard');
           await Clipboard.setData(
             ClipboardData(text: args['text']?.toString() ?? ''),
           );
           break;
         case 'tbankPickImage':
+          _requireCapability('pickImage');
           result = await _pickImage(args);
           break;
         case 'tbankToast':
+          _requireCapability('toast');
           final String message = args['message']?.toString() ?? '';
           if (message.isNotEmpty && mounted) {
             ScaffoldMessenger.of(context)
@@ -363,8 +485,22 @@ class _PluginPracticeViewState extends State<PluginPracticeView> {
   Future<Map<String, dynamic>> _fetch(Map<String, dynamic> args) async {
     final String url = args['url']?.toString() ?? '';
     final Uri? uri = Uri.tryParse(url);
-    if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https')) {
-      return <String, dynamic>{'error': '仅支持 http/https 地址'};
+    if (uri == null || uri.scheme != 'https') {
+      return <String, dynamic>{'error': '仅支持 https 地址'};
+    }
+    // v2 插件必须声明 networkHosts；空列表等于禁止联网。
+    final PluginManifest? plugin = widget.plugin;
+    if (plugin != null && plugin.apiVersion >= 2) {
+      final List<String> hosts = plugin.networkHosts;
+      final String host = uri.host.toLowerCase();
+      final bool allowed = hosts.any((String rule) {
+        final String value = rule.toLowerCase();
+        if (value.startsWith('.')) return host.endsWith(value);
+        return host == value;
+      });
+      if (!allowed) {
+        return <String, dynamic>{'error': '插件未获准访问该域名'};
+      }
     }
 
     final String method = (args['method']?.toString() ?? 'GET').toUpperCase();
@@ -465,8 +601,19 @@ class _PluginPracticeViewState extends State<PluginPracticeView> {
 
   Future<void> _pushContext() async {
     if (!_pageReady) return;
-    final Map<String, dynamic> context = await _contextWithImage();
-    final String json = jsonEncode(context)
+
+    final int version = ++_pushVersion;
+    // 先比较不含图片的 context；父页面 rebuild 但题目状态没变时直接跳过，
+    // 避免重复读盘、base64 编码和 JS 执行。
+    final Map<String, dynamic> context = _context();
+    final String signature = jsonEncode(context);
+    if (signature == _lastPushedSignature) return;
+
+    final Map<String, dynamic> fullContext = await _contextWithImage(context);
+    // 等待读图期间又切了题/改了状态：丢弃这次过期推送。
+    if (!mounted || version != _pushVersion) return;
+
+    final String json = jsonEncode(fullContext)
         .replaceAll('\u2028', '\\u2028')
         .replaceAll('\u2029', '\\u2029');
     // WebView2 的 loadingState.none 可能早于插件脚本定义 __tbankReceive；
@@ -491,28 +638,38 @@ class _PluginPracticeViewState extends State<PluginPracticeView> {
   }, 50);
 })();
 ''');
+    _lastPushedSignature = signature;
   }
 
-  Future<Map<String, dynamic>> _contextWithImage() async {
-    final Map<String, dynamic> context = _context();
+  Future<Map<String, dynamic>> _contextWithImage(
+    Map<String, dynamic> context,
+  ) async {
     final Question question = widget.question;
     final String? directory = widget.sourceDirectoryRef;
     if (!question.hasImage || directory == null) return context;
 
-    try {
-      final Uint8List? bytes = await BankIo.readSiblingBytes(
-        directory,
-        question.image,
-      );
-      if (bytes == null || bytes.isEmpty) return context;
-      final String mime = _imageMime(bytes);
-      final String data = 'data:$mime;base64,${base64Encode(bytes)}';
-      final Map<String, dynamic> questionMap =
-          context['question'] as Map<String, dynamic>;
-      questionMap['imageDataUrl'] = data;
-    } catch (error) {
-      debugPrint('读取插件题目配图失败：$error');
+    final String cacheKey = '${question.id}|${question.image}|$directory';
+    String? data = _cachedImageDataUrl;
+    if (_cachedImageKey != cacheKey || data == null) {
+      try {
+        final Uint8List? bytes = await BankIo.readSiblingBytes(
+          directory,
+          question.image,
+        );
+        if (bytes == null || bytes.isEmpty) return context;
+        final String mime = _imageMime(bytes);
+        data = 'data:$mime;base64,${base64Encode(bytes)}';
+        _cachedImageKey = cacheKey;
+        _cachedImageDataUrl = data;
+      } catch (error) {
+        debugPrint('读取插件题目配图失败：$error');
+        return context;
+      }
     }
+
+    final Map<String, dynamic> questionMap =
+        context['question'] as Map<String, dynamic>;
+    questionMap['imageDataUrl'] = data;
     return context;
   }
 
@@ -536,7 +693,19 @@ class _PluginPracticeViewState extends State<PluginPracticeView> {
         bytes[2] == 0x46) {
       return 'image/gif';
     }
-    return 'image/webp';
+    if (bytes.length >= 12 &&
+        bytes[0] == 0x52 &&
+        bytes[1] == 0x49 &&
+        bytes[2] == 0x46 &&
+        bytes[3] == 0x46 &&
+        bytes[8] == 0x57 &&
+        bytes[9] == 0x45 &&
+        bytes[10] == 0x42 &&
+        bytes[11] == 0x50) {
+      return 'image/webp';
+    }
+    // 未知格式按 jpeg 交给 WebView 兜底；之前统一返回 webp 会让 png/jpeg 被误标。
+    return 'image/jpeg';
   }
 
   Map<String, dynamic> _context() {

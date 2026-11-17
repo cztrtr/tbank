@@ -1,5 +1,14 @@
 // TBank 公式默写插件：练习页装配、判分状态机、计时。
 // 顶部只做定义，初始化放在文件末尾：Node 测试环境没有 document，不能碰 DOM。
+// 宿主切到其它 tab 时调用；渲染/提示可以停，计时器状态保留。
+window.__tbankPaused = false;
+window.__tbankPause = function () {
+  window.__tbankPaused = true;
+};
+window.__tbankResume = function () {
+  window.__tbankPaused = false;
+};
+
 (function () {
   "use strict";
 

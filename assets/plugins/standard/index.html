@@ -3,6 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <!-- 插件页面只允许本地资源；联网由宿主 tbankFetch 代理，避免页面直接外连。 -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self' data: blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'none'; form-action 'none'; base-uri 'none';">
   <title>TBank standard</title>
   <link rel="stylesheet" href="katex/katex.min.css">
   <link rel="stylesheet" href="style.css">

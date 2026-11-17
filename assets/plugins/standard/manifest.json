@@ -1,9 +1,11 @@
 {
   "id": "standard",
   "name": "标准题型",
-  "version": "1.3.1",
-  "apiVersion": 1,
+  "version": "1.4.0",
+  "apiVersion": 2,
   "description": "内置插件：单选、多选、判断、填空/解释，支持手写草稿与手写作答",
+  "capabilities": ["ai", "pickImage", "pen", "config", "toast"],
+  "networkHosts": [],
   "types": [
     "single_choice",
     "multiple_choice",
