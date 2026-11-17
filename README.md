@@ -252,7 +252,6 @@ flutter build windows --release
 ```json
 {
   "plugin": "standard",
-  "pluginVersion": 1,
   "questions": []
 }
 ```
@@ -260,7 +259,7 @@ flutter build windows --release
 根节点必须是 JSON 对象，所有题目放在 `questions` 数组里，数组顺序就是出题顺序。
 
 - `plugin`：处理这份题库的插件 id；省略时按 `standard` 处理；
-- `pluginVersion`：插件协议版本，省略按 1；
+- 旧版文件里的 `pluginVersion` 已被废弃：读取时忽略，下次保存会删除；
 - 一个题库只能由一个插件处理，题目里不写 plugin；
 - 第三方插件题库必须写对应的 `plugin`，并先安装该插件。
 
@@ -313,7 +312,6 @@ flutter build windows --release
 ```json
 {
   "plugin": "standard",
-  "pluginVersion": 1,
   "questions": [
     {
       "id": "Q001",
@@ -386,7 +384,6 @@ flutter build windows --release
 ```json
 {
   "plugin": "coding",
-  "pluginVersion": 1,
   "questions": [
     {
       "id": "Q001",

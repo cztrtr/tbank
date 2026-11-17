@@ -74,7 +74,6 @@ plugins/<id>/
 ```json
 {
   "plugin": "coding",
-  "pluginVersion": 1,
   "questions": [
     {
       "id": "Q001",
@@ -297,7 +296,7 @@ AI 出题、拍书出题、变式出题仍由 App 处理题目生成逻辑：
 - 某题型返回不足或校验失败会立即重试，默认每题型最多 4 次；
 - 全部题型覆盖后才写入文件；题量小于题型数时直接报错。
 
-写入文件时根节点写 `plugin` / `pluginVersion`。
+写入文件时根节点只写 `plugin`；旧版 `pluginVersion` 已废弃，保存时会被删除。
 
 ## 7. schema 支持范围
 

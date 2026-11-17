@@ -340,7 +340,6 @@ class _BookAiGeneratePageState extends State<BookAiGeneratePage> {
             questions: questions.sublist(start, end),
             batchIndex: batchIndex,
             plugin: plugin.id,
-            pluginVersion: plugin.apiVersion,
           ),
         );
       }

@@ -37,7 +37,6 @@ class _AiBankEditorPageState extends State<AiBankEditorPage> {
   /// 内存里的题目列表；改动后立即写回文件。
   List<Question> _questions = <Question>[];
   String? _plugin;
-  int? _pluginVersion;
 
   /// 多选模式与选中的题号。
   bool _selecting = false;
@@ -69,7 +68,6 @@ class _AiBankEditorPageState extends State<AiBankEditorPage> {
       setState(() {
         _questions = List<Question>.of(bank.questions);
         _plugin = bank.plugin;
-        _pluginVersion = bank.pluginVersion;
         _loading = false;
       });
     } catch (error) {
@@ -85,11 +83,7 @@ class _AiBankEditorPageState extends State<AiBankEditorPage> {
   Future<bool> _persist() async {
     try {
       final String text = QuestionCodec.encode(
-        QuestionBank(
-          questions: _questions,
-          plugin: _plugin,
-          pluginVersion: _pluginVersion,
-        ),
+        QuestionBank(questions: _questions, plugin: _plugin),
       );
       await BankIo.writeText(widget.file.uri, text);
       // 编辑器改了源文件：作废旧练习副本，并清掉可能已经对不上新题干的断点。

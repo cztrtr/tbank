@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tbank/models/question_bank.dart';
 
@@ -43,20 +45,29 @@ void main() {
     expect(question.mistakeScore, 2);
   });
 
-  test('题库根 plugin 标记往返', () {
+  test('题库根 plugin 标记往返，旧 pluginVersion 不再写回', () {
     final QuestionBank bank = QuestionBank(
       questions: <Question>[sampleQuestion()],
       plugin: 'coding',
-      pluginVersion: 2,
     );
-    final QuestionBank decoded = QuestionCodec.decode(
-      QuestionCodec.encode(bank),
-    );
+    final String encoded = QuestionCodec.encode(bank);
+    final QuestionBank decoded = QuestionCodec.decode(encoded);
 
     expect(decoded.plugin, 'coding');
-    expect(decoded.pluginVersion, 2);
     expect(decoded.effectivePlugin, 'coding');
     expect(decoded.toJson().keys.first, 'plugin');
+    expect(
+      (jsonDecode(encoded) as Map<String, dynamic>).containsKey(
+        'pluginVersion',
+      ),
+      isFalse,
+    );
+
+    // 老文件里的 pluginVersion 在读取时被丢弃，保存后不会继续存在。
+    final QuestionBank legacy = QuestionCodec.decode(
+      '{"plugin":"coding","pluginVersion":2,"questions":[]}',
+    );
+    expect(QuestionCodec.encode(legacy).contains('pluginVersion'), isFalse);
   });
 
   test('自定义插件题型保留原始 type 标识', () {

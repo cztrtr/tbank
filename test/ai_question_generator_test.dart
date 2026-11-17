@@ -292,13 +292,12 @@ void main() {
         questions: parsed,
         batchIndex: 1,
         plugin: 'coding',
-        pluginVersion: 1,
       );
       final Map<String, dynamic> saved = jsonDecode(
         await File(bank.path).readAsString(),
       ) as Map<String, dynamic>;
       expect(saved['plugin'], 'coding');
-      expect(saved['pluginVersion'], 1);
+      expect(saved.containsKey('pluginVersion'), isFalse);
       expect((saved['questions'] as List<dynamic>).first['type'], 'coding');
     });
   });

@@ -295,7 +295,6 @@ class VariantQuestionGenerator {
     final String fileName = await nextFileName(source);
     final Map<String, dynamic> json = <String, dynamic>{
       'plugin': plugin.id,
-      'pluginVersion': plugin.apiVersion,
       'questions': questions,
     };
     final String content = const JsonEncoder.withIndent('  ').convert(json);

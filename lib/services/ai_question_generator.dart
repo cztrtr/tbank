@@ -306,7 +306,7 @@ class AiQuestionGenerator {
   /// 调 AI 生成 [count] 道题，校验后按「每本最多 [perBook] 题」切分保存。
   ///
   /// [plugin] 不为空时，题型说明和 type 标识都来自插件 manifest，生成文件
-  /// 根节点写入 `plugin` / `pluginVersion`；为空时保留旧的 standard 行为。
+  /// 根节点写入 `plugin`；为空时保留旧的 standard 行为。
   static Future<List<AiBankInfo>> generateAndSave({
     required String topic,
     required String requirements,
@@ -387,7 +387,6 @@ class AiQuestionGenerator {
           questions: batchQuestions,
           index: batchIndex,
           plugin: plugin?.id,
-          pluginVersion: plugin?.apiVersion,
         ),
       );
       finished += batchQuestions.length;
@@ -440,7 +439,6 @@ class AiQuestionGenerator {
           questions: questions.sublist(start, end),
           index: index,
           plugin: plugin.id,
-          pluginVersion: plugin.apiVersion,
         ),
       );
     }
@@ -548,7 +546,6 @@ class AiQuestionGenerator {
     required List<Map<String, dynamic>> questions,
     required int index,
     String? plugin,
-    int? pluginVersion,
   }) {
     return saveBatchTo(
       topic: topic,
@@ -556,7 +553,6 @@ class AiQuestionGenerator {
       questions: questions,
       batchIndex: index,
       plugin: plugin,
-      pluginVersion: pluginVersion,
     );
   }
 
@@ -577,7 +573,6 @@ class AiQuestionGenerator {
     required List<Map<String, dynamic>> questions,
     required int batchIndex,
     String? plugin,
-    int? pluginVersion,
   }) async {
     final Directory dir = await ensureBankDir(topic, rawSubTopic: subTopic);
     final String requested = sanitizeTopic(
@@ -593,7 +588,6 @@ class AiQuestionGenerator {
     final Map<String, dynamic> json = <String, dynamic>{};
     if (plugin != null && plugin.isNotEmpty) {
       json['plugin'] = plugin;
-      json['pluginVersion'] = pluginVersion ?? 1;
     }
     json['questions'] = questions;
     final String content = const JsonEncoder.withIndent('  ').convert(json);

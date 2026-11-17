@@ -8,7 +8,6 @@ class QuestionBank {
   QuestionBank({
     required this.questions,
     this.plugin,
-    this.pluginVersion,
     this.extra = const <String, dynamic>{},
   });
 
@@ -19,9 +18,6 @@ class QuestionBank {
   ///
   /// 一个题库只能由一个插件处理，题目内部不再单独标插件。
   final String? plugin;
-
-  /// 插件协议版本；用于升级兼容，null 视为 1。
-  final int? pluginVersion;
 
   /// 题库根节点里 App 不认识的字段。
   ///
@@ -210,9 +206,9 @@ class QuestionCodec {
   static QuestionBank bankFromJson(Map<String, dynamic> json) {
     final dynamic raw = json['questions'];
     final String pluginRaw = (json['plugin']?.toString() ?? '').trim();
-    final dynamic versionRaw = json['pluginVersion'];
 
-    // 题库根节点里 App 不认识的字段原样保留。
+    // 题库根节点里 App 不认识的字段原样保留；旧版 pluginVersion 已废弃，
+    // 读取时直接丢弃，下次保存不会继续写回。
     final Map<String, dynamic> extra = Map<String, dynamic>.from(json)
       ..remove('plugin')
       ..remove('pluginVersion')
@@ -220,7 +216,6 @@ class QuestionCodec {
 
     return QuestionBank(
       plugin: pluginRaw.isEmpty ? null : pluginRaw,
-      pluginVersion: versionRaw is num ? versionRaw.toInt() : null,
       extra: extra,
       questions: raw is List
           ? raw.whereType<Map<String, dynamic>>().map(questionFromJson).toList()
@@ -233,9 +228,6 @@ class QuestionCodec {
     final Map<String, dynamic> json = <String, dynamic>{};
     if (bank.plugin != null && bank.plugin!.isNotEmpty) {
       json['plugin'] = bank.plugin;
-    }
-    if (bank.pluginVersion != null) {
-      json['pluginVersion'] = bank.pluginVersion;
     }
     json['questions'] = bank.questions.map(questionToJson).toList();
     // extra 里的键在 bankFromJson 时已经排除了已知字段，不会覆盖上面的值。

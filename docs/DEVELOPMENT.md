@@ -69,7 +69,7 @@
   - standard 的 manifest 声明四种数据题型：单选 / 多选 / 判断 / 填空（说明里覆盖名词解释、解答、证明）
   - 生成 Prompt 由「用户要求 + 插件 typeDescriptions + typeSchemas/typeExamples」组成，App 不再硬编码题型说明
   - 按题型配额生成：每个已选题型至少 1 道，返回不足或 `pluginData` 校验失败会立即重试，默认每题型最多 4 次；全部覆盖后才落盘
-  - 每本最多 25 道，保存到 `Question/<主题>/<主题>-<时间戳>.json`（多本时追加 `-2`、`-3`）；根节点写 `plugin` / `pluginVersion`
+  - 每本最多 25 道，保存到 `Question/<主题>/<主题>-<时间戳>.json`（多本时追加 `-2`、`-3`）；根节点写 `plugin`
   - 标准题型继续校验选项数量/答案 key；自定义题型只校验通用字段，`pluginData` 按插件 schema 校验
   - 页面下方列出已生成题库，答错的题同样进错题本；`Question/` 下的题库也会显示在「管理」页
 - 拍书出题
@@ -82,7 +82,7 @@
 - AI 变式出题
   - 入口在「管理」页每个题库右侧的 ✨ 按钮
   - 读取题干/选项/答案/解析后，先调 AI 归纳**具体知识点**，再按源题库所属插件的题型配额重新出题
-  - 题型、说明、schema 都来自源题库的插件；生成文件根节点继承源题库的 `plugin` / `pluginVersion`
+  - 题型、说明、schema 都来自源题库的插件；生成文件根节点继承源题库的 `plugin`
   - 新题保存回原题库目录，文件名按希腊字母递增：`<原名>-alpha.json` → `-beta.json`…；自动跳过已占用名字
   - 默认题数与原题库一致（上限 100），id 从 `Q001` 重编、stats 归零、`image` 置空
   - 归纳知识点时最多均匀采样 60 道原题，避免提示词过长
@@ -305,7 +305,6 @@ API Key 的迁移逻辑（`AppConfig._loadApiKey`）：
 ```json
 {
   "plugin": "standard",
-  "pluginVersion": 1,
   "questions": [
     {
       "id": "Q001",
@@ -381,7 +380,7 @@ API Key 的迁移逻辑（`AppConfig._loadApiKey`）：
 
 - 根节点必须是对象，题目都在 `questions` 数组里；
 - 根节点 `plugin` 表示处理这份题库的插件，省略按 `standard`；一个题库只能由一个插件处理；
-- `pluginVersion` 是插件协议版本，省略按 1；
+- 旧版字段 `pluginVersion` 已废弃：读取时忽略，保存时删除；
 - standard 的 `type` 只认四个值：`single_choice`、`multiple_choice`、`true_false`、`fill_blank`；
 - 第三方插件可以使用 manifest 声明的自定义 `type`；App 会保留原始 `typeId`，由插件渲染和解释；
 - `correctAnswer` 一律是数组：单选单元素 `["B"]`、多选多元素 `["A","C"]`、填空 `["H2O"]`；
@@ -860,8 +859,7 @@ kotlin.incremental=false
 
 ### 题库与错题本标记
 
-- 题库 JSON 根节点：`"plugin": "standard"`（省略按 standard 处理）、
-  `"pluginVersion": 1`；
+- 题库 JSON 根节点：`"plugin": "standard"`（省略按 standard 处理）；
 - 一个题库只能由一个插件处理，题目内部不写 plugin；
 - 错题本根节点同样写 `plugin`，一本只收同一插件的题；同一组下不同插件
   会各自分本，目录不拆，统计/完成度仍由 App 计算。
@@ -977,7 +975,7 @@ AI 出题、拍书出题、变式出题都按插件题型工作：
 1. 用户在出题页选择插件，页面只列出该插件 manifest 的 `types`；
 2. App 把用户要求 + 插件 `typeDescriptions` 拼进生成 Prompt；
 3. AI 返回的每道题 `type` 必须是该插件声明的 id；
-4. 写入题库时根节点写 `plugin` / `pluginVersion`，题目保留原始 type；
+4. 写入题库时根节点写 `plugin`，题目保留原始 type；
 5. 变式出题沿用源题库的插件和题型说明，生成文件写回同一个 `plugin`。
 
 所以 App 只负责通用的“生成 JSON 题库”服务，题型语义由插件自己定义。
