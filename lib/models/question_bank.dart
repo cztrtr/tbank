@@ -5,7 +5,12 @@ import 'dart:convert';
 /// 一个题库就是一份 JSON，题目全部在 `questions` 数组里。
 /// 这里只做数据承载，不包含答题逻辑；答题、统计更新在 PracticePage。
 class QuestionBank {
-  QuestionBank({required this.questions, this.plugin, this.pluginVersion});
+  QuestionBank({
+    required this.questions,
+    this.plugin,
+    this.pluginVersion,
+    this.extra = const <String, dynamic>{},
+  });
 
   /// 题目列表，顺序与文件里的顺序一致。
   final List<Question> questions;
@@ -17,6 +22,13 @@ class QuestionBank {
 
   /// 插件协议版本；用于升级兼容，null 视为 1。
   final int? pluginVersion;
+
+  /// 题库根节点里 App 不认识的字段。
+  ///
+  /// 题库是用户可以直接编辑的普通 JSON，可能带 `title`、`tags` 等自定义
+  /// 元数据。App 不解释它们，但写回时必须原样保留，否则用户答一题就会
+  /// 发现文件被「清理」了。
+  final Map<String, dynamic> extra;
 
   /// 实际生效的插件 id。
   String get effectivePlugin =>
@@ -66,6 +78,7 @@ class Question {
     this.origin,
     this.mistakeScore,
     this.pluginData,
+    this.extra = const <String, dynamic>{},
   }) : typeId = typeId ?? type.value;
 
   final String id;
@@ -118,6 +131,12 @@ class Question {
   ///
   /// 插件运行时可以通过 `tbankUpdatePluginData` 修改当前题的这部分数据。
   Map<String, dynamic>? pluginData;
+
+  /// 题目里 App 不认识的额外字段（如 `tags`、`difficulty`）。
+  ///
+  /// 与 [QuestionBank.extra] 同理：写回时原样保留，避免用户手写的元数据
+  /// 在第一次答题保存后消失。
+  final Map<String, dynamic> extra;
 
   /// 这道题是否来自错题本。
   bool get isFromMistakeBook => mistakeScore != null;
@@ -193,16 +212,23 @@ class QuestionCodec {
     final String pluginRaw = (json['plugin']?.toString() ?? '').trim();
     final dynamic versionRaw = json['pluginVersion'];
 
+    // 题库根节点里 App 不认识的字段原样保留。
+    final Map<String, dynamic> extra = Map<String, dynamic>.from(json)
+      ..remove('plugin')
+      ..remove('pluginVersion')
+      ..remove('questions');
+
     return QuestionBank(
       plugin: pluginRaw.isEmpty ? null : pluginRaw,
       pluginVersion: versionRaw is num ? versionRaw.toInt() : null,
+      extra: extra,
       questions: raw is List
           ? raw.whereType<Map<String, dynamic>>().map(questionFromJson).toList()
           : <Question>[],
     );
   }
 
-  /// 写回文件：插件标记放最前面，其余字段仍只保留 questions。
+  /// 写回文件：保留根节点里用户自定义的额外字段。
   static Map<String, dynamic> bankToJson(QuestionBank bank) {
     final Map<String, dynamic> json = <String, dynamic>{};
     if (bank.plugin != null && bank.plugin!.isNotEmpty) {
@@ -212,8 +238,25 @@ class QuestionCodec {
       json['pluginVersion'] = bank.pluginVersion;
     }
     json['questions'] = bank.questions.map(questionToJson).toList();
+    // extra 里的键在 bankFromJson 时已经排除了已知字段，不会覆盖上面的值。
+    json.addAll(bank.extra);
     return json;
   }
+
+  /// 题目里的已知字段；其余键会进入 [Question.extra]。
+  static const Set<String> _questionKnownKeys = <String>{
+    'id',
+    'type',
+    'question',
+    'image',
+    'options',
+    'correctAnswer',
+    'analysis',
+    'stats',
+    'origin',
+    'mistakeScore',
+    'pluginData',
+  };
 
   /// 把 JSON 里的 type 转成枚举；未知类型按填空处理。
   static QuestionType parseType(String raw) {
@@ -233,6 +276,11 @@ class QuestionCodec {
     final String typeId = rawType.isEmpty
         ? QuestionType.fillBlank.value
         : rawType;
+
+    final Map<String, dynamic> extra = Map<String, dynamic>.from(json)
+      ..removeWhere(
+        (String key, dynamic value) => _questionKnownKeys.contains(key),
+      );
 
     return Question(
       id: json['id']?.toString() ?? '',
@@ -263,27 +311,33 @@ class QuestionCodec {
       pluginData: json['pluginData'] is Map
           ? Map<String, dynamic>.from(json['pluginData'] as Map)
           : null,
+      extra: extra,
     );
   }
 
   /// 序列化一道题；`image` / `analysis` 必须始终写回。
   static Map<String, dynamic> questionToJson(
     Question question,
-  ) => <String, dynamic>{
-    'id': question.id,
-    'type': question.typeId,
-    'question': question.question,
-    'image': question.image,
-    'options': question.options.map(optionToJson).toList(),
-    // 统一数组形态，例如 ["A"] / ["A","C"] / ["H2O"]
-    'correctAnswer': question.correctAnswers,
-    'analysis': question.analysis,
-    'stats': statsToJson(question.stats),
-    // 错题本字段：普通题库不写，保持文件干净
-    if (question.origin != null) 'origin': question.origin,
-    if (question.mistakeScore != null) 'mistakeScore': question.mistakeScore,
-    if (question.pluginData != null) 'pluginData': question.pluginData,
-  };
+  ) {
+    final Map<String, dynamic> json = <String, dynamic>{
+      'id': question.id,
+      'type': question.typeId,
+      'question': question.question,
+      'image': question.image,
+      'options': question.options.map(optionToJson).toList(),
+      // 统一数组形态，例如 ["A"] / ["A","C"] / ["H2O"]
+      'correctAnswer': question.correctAnswers,
+      'analysis': question.analysis,
+      'stats': statsToJson(question.stats),
+      // 错题本字段：普通题库不写，保持文件干净
+      if (question.origin != null) 'origin': question.origin,
+      if (question.mistakeScore != null) 'mistakeScore': question.mistakeScore,
+      if (question.pluginData != null) 'pluginData': question.pluginData,
+    };
+    // 用户自定义字段原样带回；已知字段不会被 extra 覆盖。
+    json.addAll(question.extra);
+    return json;
+  }
 
   /// 解析一个选项。
   static QuestionOption optionFromJson(Map<String, dynamic> json) =>

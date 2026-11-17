@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../services/app_config.dart';
 import '../services/mistake_books.dart';
+import '../services/secure_screen.dart';
 import '../services/update_service.dart';
 import 'plugins_page.dart';
 
@@ -22,9 +23,12 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   final TextEditingController _keyController = TextEditingController(); // 密钥输入框
+  final FocusNode _keyFocusNode = FocusNode(); // 聚焦时开启 FLAG_SECURE
   final TextEditingController _updateUrlController =
       TextEditingController(); // 更新地址输入框
   bool _saving = false; // 是否正在保存，防止重复提交
+  bool _clearingKey = false; // 是否正在清除密钥
+  bool _obscureKey = true; // 密钥输入框是否遮挡
   bool _resetting = false; // 是否正在重置错题本
 
   bool _downloading = false; // 是否正在下载更新包
@@ -40,7 +44,21 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _penOnlyInput = AppConfig.penOnlyInput;
 
   @override
+  void initState() {
+    super.initState();
+    // 只有输入框获得焦点时才开启屏幕保护，避免影响用户正常截图设置页。
+    _keyFocusNode.addListener(_onKeyFocusChanged);
+  }
+
+  void _onKeyFocusChanged() {
+    SecureScreen.setEnabled(_keyFocusNode.hasFocus);
+  }
+
+  @override
   void dispose() {
+    _keyFocusNode.removeListener(_onKeyFocusChanged);
+    SecureScreen.setEnabled(false);
+    _keyFocusNode.dispose();
     _keyController.dispose();
     _updateUrlController.dispose();
     super.dispose();
@@ -57,19 +75,68 @@ class _SettingsPageState extends State<SettingsPage> {
 
     setState(() => _saving = true);
     try {
-      await AppConfig.setDsApiKey(value);
+      final bool saved = await AppConfig.setDsApiKey(value);
       if (!mounted) return;
 
-      _keyController.clear();
-      FocusScope.of(context).unfocus();
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('已保存')));
+      if (saved) {
+        _keyController.clear();
+        FocusScope.of(context).unfocus();
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('已保存到系统安全存储')));
+      } else {
+        // 失败时不回填 Key，也不假装成功；提示优先使用安全存储给出的原因。
+        final String reason =
+            AppConfig.dsApiKeyWarning ??
+            AppConfig.lastSaveError ??
+            '系统安全存储不可用';
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('未保存：$reason')));
+      }
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('保存失败：$error')));
+          .showSnackBar(const SnackBar(content: Text('保存失败，请稍后重试')));
     } finally {
       if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  /// 清除密钥：安全存储删除成功后才更新界面。
+  Future<void> _clearKey() async {
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext dialogContext) => AlertDialog(
+        title: const Text('清除 API Key'),
+        content: const Text('清除后 AI 判分、AI 解析和 AI 出题将不可用，直到重新填写。'),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('清除'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || confirmed != true) return;
+
+    setState(() => _clearingKey = true);
+    try {
+      final bool cleared = await AppConfig.setDsApiKey(null);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            cleared
+                ? '已清除 API Key'
+                : '清除失败：${AppConfig.dsApiKeyWarning ?? '系统安全存储不可用'}',
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _clearingKey = false);
     }
   }
 
@@ -204,30 +271,66 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
           const SizedBox(height: 6),
 
-          // 配置状态；不回填原值，只提示是否已配置
-          ValueListenableBuilder<String?>(
-            valueListenable: AppConfig.dsApiKeyNotifier,
-            builder: (BuildContext context, String? key, _) {
-              final bool configured = (key ?? '').isNotEmpty;
-              return Row(
+          // 配置状态；不回填原值，只提示是否已配置以及存储位置。
+          ValueListenableBuilder<DsApiKeyStatus>(
+            valueListenable: AppConfig.dsApiKeyStatusNotifier,
+            builder: (BuildContext context, DsApiKeyStatus status, _) {
+              final (IconData icon, Color color, String label) = switch (
+                status
+              ) {
+                DsApiKeyStatus.secure => (
+                  Icons.check_circle,
+                  colorScheme.primary,
+                  '已配置（系统安全存储）',
+                ),
+                DsApiKeyStatus.legacyFallback => (
+                  Icons.warning_amber_rounded,
+                  colorScheme.error,
+                  '已配置（旧版存储，建议重新输入一次以迁移）',
+                ),
+                DsApiKeyStatus.missingAfterRestore => (
+                  Icons.error_outline,
+                  colorScheme.error,
+                  '安全存储里的 Key 无法读取，请重新输入',
+                ),
+                DsApiKeyStatus.unavailable => (
+                  Icons.error_outline,
+                  colorScheme.error,
+                  '系统安全存储不可用',
+                ),
+                DsApiKeyStatus.none => (
+                  Icons.circle_outlined,
+                  colorScheme.onSurfaceVariant,
+                  '未配置',
+                ),
+              };
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  Icon(
-                    configured ? Icons.check_circle : Icons.circle_outlined,
-                    size: 14,
-                    color: configured
-                        ? colorScheme.primary
-                        : colorScheme.onSurfaceVariant,
-                  ),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      configured ? '已配置，重新输入可覆盖' : '未配置',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: colorScheme.onSurfaceVariant,
+                  Row(
+                    children: <Widget>[
+                      Icon(icon, size: 14, color: color),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          label,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: status == DsApiKeyStatus.secure
+                                ? colorScheme.onSurfaceVariant
+                                : color,
+                          ),
+                        ),
                       ),
-                    ),
+                    ],
                   ),
+                  if ((AppConfig.dsApiKeyWarning ?? '').isNotEmpty) ...<Widget>[
+                    const SizedBox(height: 4),
+                    Text(
+                      AppConfig.dsApiKeyWarning!,
+                      style: TextStyle(fontSize: 12, color: colorScheme.error),
+                    ),
+                  ],
                 ],
               );
             },
@@ -236,13 +339,30 @@ class _SettingsPageState extends State<SettingsPage> {
 
           TextField(
             controller: _keyController,
+            focusNode: _keyFocusNode,
+            obscureText: _obscureKey,
             autocorrect: false,
             enableSuggestions: false,
+            // 不让输入法把 Key 加进个人词库。
+            enableIMEPersonalizedLearning: false,
+            smartDashesType: SmartDashesType.disabled,
+            smartQuotesType: SmartQuotesType.disabled,
+            keyboardType: TextInputType.visiblePassword,
             textInputAction: TextInputAction.done,
             onSubmitted: (_) => _save(),
             decoration: InputDecoration(
               hintText: '粘贴 API Key',
+              helperText: '仅保存到系统安全存储，不会写入 config.json',
               isDense: true,
+              suffixIcon: IconButton(
+                tooltip: _obscureKey ? '显示密钥' : '隐藏密钥',
+                onPressed: () => setState(() => _obscureKey = !_obscureKey),
+                icon: Icon(
+                  _obscureKey
+                      ? Icons.visibility_outlined
+                      : Icons.visibility_off_outlined,
+                ),
+              ),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
               ),
@@ -250,18 +370,37 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
           const SizedBox(height: 12),
 
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton(
-              onPressed: _saving ? null : _save,
-              child: _saving
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Text('保存'),
-            ),
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: FilledButton(
+                  onPressed: _saving ? null : _save,
+                  child: _saving
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('保存'),
+                ),
+              ),
+              if (AppConfig.hasDsApiKey) ...<Widget>[
+                const SizedBox(width: 10),
+                OutlinedButton(
+                  onPressed: _clearingKey ? null : _clearKey,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: colorScheme.error,
+                  ),
+                  child: _clearingKey
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('清除'),
+                ),
+              ],
+            ],
           ),
 
           const SizedBox(height: 28),

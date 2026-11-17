@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    release 包只允许 HTTPS。DeepSeek API、插件下载、应用更新都必须走 TLS；
+    本地插件页面用 file:// 加载，不受这里影响。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+</network-security-config>

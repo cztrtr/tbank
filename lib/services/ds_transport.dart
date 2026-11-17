@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import 'ds_api_exception.dart';
+import 'secret_redactor.dart';
 
 /// 流式响应里的一小段：可能携带正文，也可能携带思考过程。
 class DsStreamDelta {
@@ -56,7 +57,10 @@ class DsTransport {
 
       final String content = _extractMessageField(json, 'content');
       if (content.isEmpty) {
-        throw DsApiException('DeepSeek 返回了空回答', body: body);
+        throw DsApiException(
+          'DeepSeek 返回了空回答',
+          body: SecretRedactor.redact(body),
+        );
       }
       return content;
     } on DsApiException {
@@ -201,56 +205,57 @@ class DsTransport {
 
   /// 把 HTTP 错误码翻译成可读提示。
   static DsApiException _httpError(int statusCode, String body) {
-    final String detail = _errorMessage(body);
+    final String safeBody = SecretRedactor.redact(body);
+    final String detail = _errorMessage(safeBody);
 
     switch (statusCode) {
       case 400:
         return DsApiException(
           '请求参数有误（400）：$detail',
           statusCode: statusCode,
-          body: body,
+          body: safeBody,
         );
       case 401:
         return DsApiException(
           'API Key 无效或已失效（401），请在设置里重新填写',
           statusCode: statusCode,
-          body: body,
+          body: safeBody,
         );
       case 402:
         return DsApiException(
           '账户余额不足（402），请到 DeepSeek 平台充值',
           statusCode: statusCode,
-          body: body,
+          body: safeBody,
         );
       case 422:
         return DsApiException(
           '请求格式错误（422）：$detail',
           statusCode: statusCode,
-          body: body,
+          body: safeBody,
         );
       case 429:
         return DsApiException(
           '请求过于频繁（429），请稍后再试',
           statusCode: statusCode,
-          body: body,
+          body: safeBody,
         );
       case 500:
         return DsApiException(
           'DeepSeek 服务异常（500），请稍后重试',
           statusCode: statusCode,
-          body: body,
+          body: safeBody,
         );
       case 503:
         return DsApiException(
           'DeepSeek 服务繁忙（503），请稍后重试',
           statusCode: statusCode,
-          body: body,
+          body: safeBody,
         );
       default:
         return DsApiException(
           '请求失败（$statusCode）：$detail',
           statusCode: statusCode,
-          body: body,
+          body: safeBody,
         );
     }
   }

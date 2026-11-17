@@ -191,6 +191,8 @@ class _AiBankEditorPageState extends State<AiBankEditorPage> {
       origin: origin?.origin,
       mistakeScore: origin?.mistakeScore,
       pluginData: origin?.pluginData,
+      // 编辑表单/AI 不认识的字段继续保留，避免保存一次就丢用户元数据。
+      extra: origin?.extra ?? const <String, dynamic>{},
     );
   }
 

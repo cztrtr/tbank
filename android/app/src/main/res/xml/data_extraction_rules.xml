@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    API 31+ 的云备份 / 换机迁移规则。
+    API Key 存在 Keystore 保护的密文里，备份恢复后 Keystore 私钥不一定还在，
+    因此这里排除全部 App 数据；题库文件在用户目录，不受影响。
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" path="." />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" path="." />
+    </device-transfer>
+</data-extraction-rules>

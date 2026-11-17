@@ -106,8 +106,37 @@ class QuestionBankStorage {
       _pendingSyncWarning = '题库文件在练习期间被修改，已优先加载新内容；旧练习统计未合并。';
     }
 
+    // 指纹缺失（旧版本、指纹文件被清理、写入失败）：不能盲目把旧副本写回，
+    // 否则可能覆盖用户后来手动编辑的题干/解析。
+    //
+    // 桌面端可以用 mtime 判断：源文件比副本新 → 以源文件为准；
+    // SAF 没有可靠的 mtime，改为「先加载副本、记录当前源文件指纹」，
+    // 之后 syncBack 会再次比对，源文件变过就拒绝覆盖。
+    if (await working.exists() &&
+        await dirty.exists() &&
+        baseline == null &&
+        await _sourceLooksNewer(working)) {
+      await working.delete();
+      await dirty.delete();
+      _pendingSyncWarning = '题库文件在练习期间被修改，已优先加载新内容；旧练习统计未合并。';
+    }
+
     // 上次没回拷成功：先补一次；还不行就读副本，保住宿主答过的统计。
     if (await working.exists() && await dirty.exists()) {
+      if (baseline == null) {
+        // 无法确认副本与源文件的先后关系：保住宿主统计，但不立即回写。
+        // 记住当前源文件指纹，后续 syncBack 发现源文件再变就拒绝覆盖。
+        final String raw = await working.readAsString();
+        final QuestionBank bank = _decode(raw);
+        _workingFile = working;
+        _dirtyFlag = dirty;
+        _sourceStamp = stamp;
+        _sourceFingerprint = sourceFingerprint;
+        _pendingSyncWarning =
+            '无法确认上次的答题记录是否已写回题库文件，已保留本地副本；'
+            '下次同步时会再次检查源文件。';
+        return bank;
+      }
       if (await _writeBack(working)) {
         if (await dirty.exists()) await dirty.delete();
         final String written = await working.readAsString();
@@ -197,6 +226,22 @@ class QuestionBankStorage {
 
   /// 解析题库 JSON；根节点不是对象时抛出 [FormatException]。
   QuestionBank _decode(String raw) => QuestionCodec.decode(raw);
+
+  /// 指纹缺失时，桌面端用 mtime 粗略判断源文件是否比工作副本新。
+  ///
+  /// SAF 的 content:// 没有可用的 mtime，返回 false，交给上面的
+  /// 「保副本 + 记录指纹」分支处理。
+  Future<bool> _sourceLooksNewer(File working) async {
+    if (file.uri.startsWith('content://')) return false;
+    try {
+      final DateTime sourceTime = await File(file.uri).lastModified();
+      final DateTime workingTime = await working.lastModified();
+      return sourceTime.isAfter(workingTime);
+    } catch (error) {
+      debugPrint('比较题库源文件时间失败：${error.runtimeType}');
+      return false;
+    }
+  }
 
   /// 把工作副本写回来源，成功返回 true。
   ///

@@ -1,8 +1,10 @@
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:path/path.dart' as p;
 
 import '../models/question_bank_file.dart';
+import 'atomic_write.dart';
 import 'saf.dart';
 
 /// 题库文件的统一读写入口。
@@ -141,12 +143,15 @@ class BankIo {
   }
 
   /// 覆盖写入题库 JSON 文本。
+  ///
+  /// 桌面端用 [AtomicWrite]（临时文件 + `.bak`）；SAF 端由原生层做
+  /// 「先读旧内容、写失败回滚」，并依靠 App 私有目录里的工作副本兜底。
   static Future<void> writeText(String fileRef, String text) async {
     if (_isSafRef(fileRef)) {
       await Saf.writeText(fileRef, text);
       return;
     }
-    await File(fileRef).writeAsString(text, flush: true);
+    await AtomicWrite.writeText(fileRef, text);
   }
 
   /// 在题库目录里写入（或覆盖）一个同名 JSON 文件。
@@ -163,22 +168,50 @@ class BankIo {
       return;
     }
 
-    final File file = File('$directoryRef${Platform.pathSeparator}$fileName');
-    await file.writeAsString(text, flush: true);
+    final String safeName = safeSiblingName(fileName);
+    if (safeName.isEmpty) {
+      throw FileSystemException('非法文件名', fileName);
+    }
+    final File file = File(p.join(directoryRef, safeName));
+    await AtomicWrite.writeText(file.path, text);
   }
 
   /// 在题库目录里按文件名读取配图字节；找不到返回 null。
+  ///
+  /// 题库 JSON 的 `image` 字段是用户/第三方可写的。这里只接受**纯文件名**，
+  /// 拒绝 `../`、绝对路径和子目录，避免桌面端读到题库目录外的文件。
   static Future<Uint8List?> readSiblingBytes(
     String directoryRef,
     String fileName,
   ) async {
+    final String safeName = safeSiblingName(fileName);
+    if (safeName.isEmpty) return null;
+
     if (_isSafRef(directoryRef)) {
-      return Saf.readChildBytes(directoryRef, fileName);
+      return Saf.readChildBytes(directoryRef, safeName);
     }
 
-    final File file = File('$directoryRef${Platform.pathSeparator}$fileName');
+    final String directory = p.absolute(directoryRef);
+    final String target = p.absolute(p.join(directory, safeName));
+    if (!p.isWithin(directory, target)) return null;
+
+    final File file = File(target);
     if (!await file.exists()) return null;
     return file.readAsBytes();
+  }
+
+  /// 把外部传入的文件名收敛成一个安全的同级文件名。
+  ///
+  /// - 只取 basename：`a/b.png` → `b.png`；
+  /// - 拒绝空串、`.`、`..`；
+  /// - 允许中文、空格、点、下划线等普通文件名字符。
+  static String safeSiblingName(String raw) {
+    final String name = raw.trim();
+    if (name.isEmpty || name == '.' || name == '..') return '';
+    if (name.contains('/') || name.contains('\\')) return '';
+    if (name.contains('..')) return '';
+    final String base = p.basename(name);
+    return base == name ? base : '';
   }
 
   /// 释放目录授权（仅 SAF 有意义，桌面端是空操作）。

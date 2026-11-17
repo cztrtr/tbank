@@ -9,15 +9,21 @@ environment:
 dependencies:
   # 插件 zip 包解压
   archive: ^4.0.0
+  # 更新包 / 插件包的 SHA-256 校验
+  crypto: ^3.0.7
   # 调起系统目录选择器（仅桌面端使用；Android 走 SAF 原生通道）
   file_picker: ^13.1.0
   flutter:
     sdk: flutter
-  # DeepSeek API 请求（REST 调用，见 lib/services/ds_api_service.dart）
+  # DeepSeek API Key 的落盘：Android Keystore / Windows DPAPI，不再写进 config.json
+  flutter_secure_storage: ^11.2.0
+  # LaTeX 公式渲染（题干、选项、解析、AI 输出）
   flutter_math_fork: ^0.7.4
   http: ^1.6.0
   # 拍照 / 选择作答图片（Android 相机 + 各平台相册/文件选择）
   image_picker: ^1.2.4
+  # 路径拼接与目录边界校验（防止题库 JSON 里的 image 字段越界）
+  path: ^1.9.1
   # 定位 App 私有目录：config.json 和题库工作副本都放在这里
   path_provider: ^2.1.6
   webview_flutter: ^4.14.1

@@ -16,6 +16,7 @@ import android.provider.DocumentsContract
 import android.provider.Settings
 import android.util.Log
 import android.view.KeyEvent
+import android.view.WindowManager
 import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -45,6 +46,7 @@ import java.util.concurrent.Executors
 class MainActivity : FlutterActivity() {
     private val channelName = "tbank/saf"
     private val updateChannelName = "tbank/app_update"
+    private val securityChannelName = "tbank/security"
     private val requestPickDirectory = 0x5AF1
     private val tag = "TBankSaf"
 
@@ -164,6 +166,22 @@ class MainActivity : FlutterActivity() {
                     }
                 } catch (e: Exception) {
                     result.error("update_error", e.message ?: e.toString(), null)
+                }
+            }
+
+        // 敏感输入页的屏幕保护：开启后截图/录屏/最近任务预览都会变黑。
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, securityChannelName)
+            .setMethodCallHandler { call, result ->
+                if (call.method == "setSecureScreen") {
+                    val enabled = call.argument<Boolean>("enabled") ?: false
+                    if (enabled) {
+                        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                    } else {
+                        window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                    }
+                    result.success(true)
+                } else {
+                    result.notImplemented()
                 }
             }
 
@@ -492,11 +510,33 @@ class MainActivity : FlutterActivity() {
 
     private fun writeText(uriString: String, text: String) {
         val uri = Uri.parse(uriString)
-        // "wt" = write + truncate，避免覆盖后残留旧内容
-        contentResolver.openOutputStream(uri, "wt")?.use { output ->
-            output.write(text.toByteArray(Charsets.UTF_8))
-            output.flush()
-        } ?: throw IllegalStateException("无法写入文件：$uriString")
+        // SAF 文档没有通用的原子 rename API：先保留旧内容，写入抛异常时回滚。
+        // 进程被系统强杀仍可能留下半截文件，题库侧由 App 私有目录的工作副本
+        // 和 config.json.bak 兜底。
+        val previous = try {
+            contentResolver.openInputStream(uri)?.use { it.readBytes() }
+        } catch (_: Exception) {
+            null
+        }
+        try {
+            // "wt" = write + truncate，避免覆盖后残留旧内容
+            contentResolver.openOutputStream(uri, "wt")?.use { output ->
+                output.write(text.toByteArray(Charsets.UTF_8))
+                output.flush()
+            } ?: throw IllegalStateException("无法写入文件：$uriString")
+        } catch (error: Exception) {
+            if (previous != null) {
+                try {
+                    contentResolver.openOutputStream(uri, "wt")?.use { output ->
+                        output.write(previous)
+                        output.flush()
+                    }
+                } catch (restoreError: Exception) {
+                    Log.w(tag, "回滚文件失败：$uriString", restoreError)
+                }
+            }
+            throw error
+        }
     }
 
     /**
