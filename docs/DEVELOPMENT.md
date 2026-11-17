@@ -128,7 +128,8 @@ lib/
 ├── main.dart                       # 入口、主题、启动时加载配置
 ├── models/
 │   ├── question_bank.dart          # 题库/题目/选项/统计/题型枚举 + QuestionCodec 编解码入口
-│   └── question_bank_file.dart     # 题库文件（名称 + 引用 + 所属目录）
+│   ├── question_bank_file.dart     # 题库文件（名称 + 引用 + 所属目录）
+│   └── mistake_book_info.dart      # 错题本列表项模型
 ├── services/
 │   ├── app_config.dart             # config.json 读写、全局 notifier、API Key 迁移
 │   ├── atomic_write.dart           # 临时文件 + .bak 的原子写/备份恢复
@@ -148,7 +149,6 @@ lib/
 │   ├── variant_question_generator.dart # AI 变式出题：读题库→归纳知识点→按希腊字母命名写回同目录
 │   ├── update_service.dart         # 应用更新：下载 APK + 调起系统安装器
 │   ├── plugin_manager.dart         # 插件目录、manifest、安装/卸载、配置读写
-│   ├── plugin_runtime.dart         # 插件 WebView 运行时开关
 │   ├── plugin_schema.dart          # pluginData 的轻量 JSON Schema 校验
 │   └── mistake_books.dart          # 错题本收集、分本、计数
 ├── screen/
@@ -167,8 +167,10 @@ lib/
 │   ├── plugins_page.dart           # 插件管理页（导入/下载/卸载/齿轮）
 │   ├── mistake_books_page.dart     # 错题本二级页面（先展示再后台收集）
 │   ├── ai_generate_page.dart       # AI 出题页（插件题型 + 已生成题库）
+│   ├── ai_bank_list.dart           # AI 出题/拍书出题共用的已生成题库列表
 │   ├── book_ai_generate_page.dart  # 拍书出题页（图片 + 插件题型）
 │   ├── variant_generate_page.dart  # AI 变式出题页（源题库插件 + 知识点）
+│   ├── question_editor_sheet.dart  # 题目编辑底部表单（从编辑器页拆出）
 │   ├── me_page.dart                # 个人中心入口
 │   ├── quick_start_page.dart       # 快速开始
 │   ├── stats_page.dart             # 学习统计
@@ -467,7 +469,7 @@ flush + `syncBack()`，以及断点 `saveProgress` / `clearProgress`。
 
 - `PracticeHostData` 携带题目、选项、已答状态、AI 回调和提交/翻页回调；
 - `defaultPracticeHostBuilder` 返回 `PluginPracticeView`（WebView 插件）；
-- widget 测试可注入 fake host，不再依赖原生 `PracticeQuestionView`。
+- widget 测试注入 fake host；原生 `PracticeQuestionView` 已移除，生产/测试都只有一条宿主抽象。
 
 ### QuestionCodec（`lib/models/question_bank.dart`）
 
