@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../models/question_bank_file.dart';
+import 'atomic_write.dart';
 import 'ref_hash.dart';
 
 /// 一次练习的断点：当前题号、本次计数、已答题的判分结果。
@@ -126,7 +127,7 @@ class PracticeProgress {
             },
         },
       };
-      await progressFile.writeAsString(jsonEncode(json), flush: true);
+      await AtomicWrite.writeText(progressFile.path, jsonEncode(json));
     } catch (error) {
       debugPrint('保存练习进度失败：$error');
     }

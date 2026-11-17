@@ -34,6 +34,7 @@ import 'package:path_provider/path_provider.dart';
 import '../models/question_bank_file.dart';
 import 'ai_question_generator.dart';
 import 'app_config.dart';
+import 'atomic_write.dart';
 import 'bank_io.dart';
 
 /// 错题本列表里的一本。
@@ -223,7 +224,7 @@ class MistakeBooks {
   /// 排在最后。
   static Future<List<MistakeBookInfo>> list() async {
     final Directory dir = await directory();
-    final List<File> files = _allJsonFiles(dir);
+    final List<File> files = await _allJsonFiles(dir);
     final List<MistakeBookInfo> books = <MistakeBookInfo>[];
 
     for (final File file in files) {
@@ -289,7 +290,7 @@ class MistakeBooks {
     // 1. 读出现有本子：按分组归类，并收集全局 origin
     final Map<String, List<_BookData>> booksByGroup =
         <String, List<_BookData>>{};
-    for (final File file in _allJsonFiles(root)) {
+    for (final File file in await _allJsonFiles(root)) {
       final _BookData? book = await _readBook(file);
       if (book == null) continue;
       booksByGroup
@@ -712,7 +713,7 @@ class MistakeBooks {
       // 迁移映射同样要落到错题本与删除清单，避免之后重复收集
       final Directory dir = await directory();
       final List<_BookData> books = <_BookData>[];
-      for (final File file in _allJsonFiles(dir)) {
+      for (final File file in await _allJsonFiles(dir)) {
         final _BookData? book = await _readBook(file);
         if (book != null) books.add(book);
       }
@@ -824,7 +825,7 @@ class MistakeBooks {
     //    根目录的 deleted_origins.json 同样在这里一并删掉。
     final List<File> files = <File>[];
     try {
-      for (final FileSystemEntity entity in dir.listSync(recursive: true)) {
+      await for (final FileSystemEntity entity in dir.list(recursive: true)) {
         if (entity is File) files.add(entity);
       }
     } catch (error) {
@@ -850,7 +851,7 @@ class MistakeBooks {
     // 2. 删除根目录下所有剩余内容（含嵌套分组子目录、未知文件），根目录本身保留。
     //    分组名可能带 `/`，所以不能只删根目录下一层；必须递归删除。
     try {
-      for (final FileSystemEntity entity in dir.listSync()) {
+      await for (final FileSystemEntity entity in dir.list()) {
         try {
           await entity.delete(recursive: true);
         } catch (error) {
@@ -945,16 +946,14 @@ class MistakeBooks {
   /// 递归列出所有分组子文件夹下的 `.json` 本子，按「组名 + 本名顺序」排序。
   ///
   /// 跳过用来记录「已删除来源」的清单文件，它不是错题本。
-  static List<File> _allJsonFiles(Directory root) {
-    final List<File> files = root
-        .listSync(recursive: true)
-        .whereType<File>()
-        .where(
-          (File file) =>
-              file.path.toLowerCase().endsWith('.json') &&
-              _baseName(file).toLowerCase() != _deletedBaseName,
-        )
-        .toList();
+  static Future<List<File>> _allJsonFiles(Directory root) async {
+    final List<File> files = <File>[];
+    await for (final FileSystemEntity entity in root.list(recursive: true)) {
+      if (entity is! File) continue;
+      if (!entity.path.toLowerCase().endsWith('.json')) continue;
+      if (_baseName(entity).toLowerCase() == _deletedBaseName) continue;
+      files.add(entity);
+    }
     files.sort((File a, File b) {
       final int group = _compareGroup(_groupOf(root, a), _groupOf(root, b));
       if (group != 0) return group;
@@ -1019,7 +1018,7 @@ class MistakeBooks {
     );
     final String content = const JsonEncoder.withIndent('  ')
         .convert(<String>[...origins]);
-    await file.writeAsString(content, flush: true);
+    await AtomicWrite.writeText(file.path, content);
   }
 
   static Future<_BookData?> _readBook(File file) async {
@@ -1099,7 +1098,7 @@ class MistakeBooks {
     json['questions'] = book.questions;
 
     final String content = const JsonEncoder.withIndent('  ').convert(json);
-    await book.file.writeAsString(content, flush: true);
+    await AtomicWrite.writeText(book.file.path, content);
   }
 }
 

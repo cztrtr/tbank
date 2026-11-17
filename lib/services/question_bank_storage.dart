@@ -5,6 +5,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../models/question_bank.dart';
 import '../models/question_bank_file.dart';
+import 'atomic_write.dart';
 import 'bank_io.dart';
 import 'ref_hash.dart';
 
@@ -264,9 +265,9 @@ class QuestionBankStorage {
       final File? working = _workingFile;
       if (working == null) return;
 
-      // 题目量小，直接整份覆盖写
+      // 题目量小，直接整份覆盖写；工作副本也用原子写，避免半截 JSON。
       final String content = QuestionCodec.encode(bank);
-      await working.writeAsString(content, flush: true);
+      await AtomicWrite.writeText(working.path, content);
       await _markDirty();
     });
   }

@@ -5,6 +5,8 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'atomic_write.dart';
+
 /// 某一天的答题汇总。
 class StudyDay {
   const StudyDay({
@@ -223,6 +225,6 @@ class StudyHistory {
     }
     final String content = const JsonEncoder.withIndent('  ')
         .convert(<String, dynamic>{'version': 1, 'days': days});
-    await file.writeAsString(content, flush: true);
+    await AtomicWrite.writeText(file.path, content);
   }
 }

@@ -114,6 +114,12 @@ class _QuestionImageState extends State<QuestionImage> {
                 bytes,
                 width: double.infinity,
                 fit: BoxFit.contain,
+                // 按屏幕物理像素解码，避免大图按原始分辨率占满内存。
+                cacheWidth:
+                    (MediaQuery.sizeOf(context).width *
+                            MediaQuery.devicePixelRatioOf(context))
+                        .round(),
+                semanticLabel: '题目配图：$name',
                 // 文件损坏、格式不支持等解码失败时也走占位框
                 errorBuilder:
                     (BuildContext context, Object error, StackTrace? _) {

@@ -55,6 +55,7 @@ class AppConfig {
   bool _loaded = false; // 是否已完成加载，防止重复读文件
   String? _dsApiKey; // 内存中的 DS API Key（只在进程内明文缓存，供请求使用）
   DsApiKeyStatus _dsKeyStatus = DsApiKeyStatus.none;
+  bool _expectedSecureKey = false; // config 标记 secure 但本次读不到时提示恢复失败
   String? _dsKeyWarning; // 给设置页展示的 Key 存储警告
   SecretStore _secretStore = FlutterSecretStore();
   int _penDoubleTapMs = penDoubleTapDefault; // 笔尖双击切换笔/橡皮的时间窗（毫秒）
@@ -283,6 +284,9 @@ class AppConfig {
 
   /// 清除 Key：安全存储删除成功后才清内存和配置。
   static Future<bool> _clearApiKey() async {
+    final String? previousKey = _instance._dsApiKey;
+    final DsApiKeyStatus previousStatus = _instance._dsKeyStatus;
+
     try {
       await _instance._secretStore.delete(SecretKeys.dsApiKey);
     } on SecretStoreException catch (error) {
@@ -295,9 +299,27 @@ class AppConfig {
     _instance._dsKeyStatus = DsApiKeyStatus.none;
     _instance._dsKeyWarning = null;
     final bool saved = await _instance._save();
+    if (!saved) {
+      // 配置没写成功时旧 config 里可能还有 base64，下次启动会“复活”；
+      // 把 Key 重新写回安全存储并恢复状态，保证「清除失败」名副其实。
+      if (previousKey != null) {
+        try {
+          await _instance._secretStore.write(
+            SecretKeys.dsApiKey,
+            previousKey,
+          );
+          _instance._dsApiKey = previousKey;
+          _instance._dsKeyStatus = previousStatus;
+        } on SecretStoreException {
+          // 回滚也失败：保持 cleared 内存状态，至少本次会话已禁用 AI。
+        }
+      }
+      return false;
+    }
+
     final File? file = _instance._file;
     if (file != null) await AtomicWrite.deleteBackup(file.path);
-    return saved;
+    return true;
   }
 
   /// 修改笔尖双击间隔；超出范围会被夹到 150~700ms。
@@ -431,11 +453,14 @@ class AppConfig {
 
       if (data != null) {
         _applyConfig(data);
+        _expectedSecureKey =
+            data['dsApiKeyStorage']?.toString() == 'secure';
         final String? legacy = _decodeApiKey(data['dsApiKey']);
         await _loadApiKey(legacy);
       } else {
         // 没有任何可用配置：先把损坏文件脱敏归档，再写一份默认配置。
         await _archiveBadConfig();
+        _loadWarning = '配置文件损坏，已重建默认设置。';
         await _loadApiKey(null);
         needSave = true;
       }
@@ -543,9 +568,15 @@ class AppConfig {
     _dsApiKey = null;
     if (secureReadFailed) {
       _dsKeyStatus = DsApiKeyStatus.unavailable;
+    } else if (_expectedSecureKey) {
+      // 配置说「已存 secure」，但 Keystore/DPAPI 里读不到：
+      // 常见于清除数据后恢复旧配置、或系统重置了密钥。
+      _dsKeyStatus = DsApiKeyStatus.missingAfterRestore;
+      _dsKeyWarning = '安全存储里的 Key 无法读取，请重新输入';
     } else {
       _dsKeyStatus = DsApiKeyStatus.none;
     }
+    _expectedSecureKey = false;
   }
 
   /// 删除 config.json 里的旧版 dsApiKey，并清掉可能含 Key 的备份。
