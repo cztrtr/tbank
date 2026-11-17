@@ -22,8 +22,10 @@ plugins/<id>/
   "id": "coding",
   "name": "代码题",
   "version": "1.0.0",
-  "apiVersion": 1,
+  "apiVersion": 2,
   "description": "编程题与代码审查",
+  "capabilities": ["ai", "pickImage", "config", "toast"],
+  "networkHosts": [],
   "types": ["coding", "code_review"],
   "typeNames": {
     "coding": "代码题",
@@ -58,7 +60,12 @@ plugins/<id>/
 - `typeNames`：出题界面显示名；
 - `typeDescriptions`：AI 出题说明；
 - `typeSchemas` / `typeExamples`：`pluginData` 的 JSON Schema 和示例；
+- `capabilities`：v2 高风险能力声明，可选值 `ai`、`pickImage`、`pen`、`readBank`、`fetch`、`clipboard`、`config`、`toast`；
+- `networkHosts`：`tbankFetch` 允许访问的域名（精确域名或 `.example.com` 子域后缀）；不要声明用不到的域名；
 - 也兼容 `questionSchema` / `questionExample` 作为所有题型的默认值。
+
+> `apiVersion: 1` 的旧插件不校验 `capabilities`，保持兼容；新插件建议直接写 `apiVersion: 2`。
+> v2 插件没有声明的能力会被宿主拒绝，并返回 `插件未声明 xxx 能力`。
 
 ## 3. 题库格式
 
@@ -164,21 +171,42 @@ window.__tbankReject(id, message)
 | `tbankAiComplete` | `{prompt, images?: [dataUrl]}` | AI 返回文本；Prompt 由插件自己生成 |
 | `tbankAiExplain` | `{answer}` | 旧接口：App 生成解析 Prompt，保留兼容 |
 | `tbankAiScore` | `{answer, images: [dataUrl]}` | `0-10` 整数；App 内置评分 Prompt 并解析 |
-| `tbankReadBank` | 无 | 当前题库原始 JSON 文本 |
-| `tbankReadImage` | `{name}` | `{dataUrl}` |
+| `tbankReadBank` | 无 | 当前题库原始 JSON 文本（v2 需 `readBank`） |
+| `tbankReadImage` | `{name}` | `{dataUrl}`（只接受纯文件名，不能带路径） |
 | `tbankUpdatePluginData` | `{pluginData: {...}}` | `true`，按 schema 校验后写回当前题 |
-| `tbankFetch` | `{url, method?, headers?, body?}` | `{status, body}` / `{error}` |
-| `tbankClipboardRead` | 无 | 文本 |
-| `tbankClipboardWrite` | `{text}` | `true` |
-| `tbankPickImage` | `{source: 'camera' \| 'gallery'}` | `{dataUrl}` / `{cancelled}` / `{error}` |
-| `tbankToast` | `{message}` | `true` |
+| `tbankFetch` | `{url, method?, headers?, body?}` | `{status, body}` / `{error}`（v2 需 `fetch` + `networkHosts`） |
+| `tbankClipboardRead` | 无 | 文本（v2 需 `clipboard`） |
+| `tbankClipboardWrite` | `{text}` | `true`（v2 需 `clipboard`） |
+| `tbankPickImage` | `{source: 'camera' \| 'gallery'}` | `{dataUrl}` / `{cancelled}` / `{error}`（v2 需 `pickImage`） |
+| `tbankToast` | `{message}` | `true`（v2 需 `toast`） |
 
 说明：
 
-- `tbankFetch` 只允许 http/https，30 秒超时、1 MB 响应上限；
+- `tbankFetch` 只允许 https，30 秒超时、1 MB 响应上限；v2 必须声明 `networkHosts`，空数组等于禁止联网；
 - `tbankReadBank` 会暴露全部答案和解析，只应安装可信插件；
 - 插件自己的持久化可直接使用 WebView `localStorage`；
-- `tbankUpdatePluginData` 只修改当前题的私有数据，不能改 `id/type/stats` 等公共字段。
+- `tbankUpdatePluginData` 只修改当前题的私有数据，不能改 `id/type/stats` 等公共字段；
+- 单条桥消息上限 2 MB，超大会被宿主丢弃；
+- 图片参数只接受纯文件名/文件名 basename，`../` 或子目录会被拒绝。
+
+### 生命周期
+
+宿主切到其它 tab 时会调用：
+
+```js
+window.__tbankPause?.();
+window.__tbankResume?.();
+```
+
+插件可以实现这两个全局函数来暂停计时器、动画或手写渲染；不实现也不会报错。
+Windows 端宿主还会调用 WebView2 的 `suspend/resume`。
+
+### 安全提醒
+
+- 插件**拿不到 API Key**，也不能自定义 `Authorization` / Base URL；需要 AI 时只能调用宿主的 `tbankAiComplete` / `tbankAiScore`；
+- 插件页面只能加载自己目录下的本地资源，不能跳转远程站点；
+- 不要引导用户把 Key 填进插件页面；Key 只应保存在 App 设置里；
+- 安装第三方插件等于运行其代码，请只安装可信来源。
 
 ## 5. 配置页
 
@@ -188,7 +216,7 @@ window.__tbankReject(id, message)
 
 ```js
 window.__tbankConfigReceive({
-  plugin: { id, name, version, apiVersion, types },
+  plugin: { id, name, version, apiVersion, types, capabilities, networkHosts },
   config: { /* 当前 config.json */ }
 })
 ```

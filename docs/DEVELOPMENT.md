@@ -69,7 +69,7 @@
   - standard 的 manifest 声明四种数据题型：单选 / 多选 / 判断 / 填空（说明里覆盖名词解释、解答、证明）
   - 生成 Prompt 由「用户要求 + 插件 typeDescriptions + typeSchemas/typeExamples」组成，App 不再硬编码题型说明
   - 按题型配额生成：每个已选题型至少 1 道，返回不足或 `pluginData` 校验失败会立即重试，默认每题型最多 4 次；全部覆盖后才落盘
-  - 每本最多 25 道，保存到 `Question/<主题>/<主题>-<时间戳>-<批次>.json`；根节点写 `plugin` / `pluginVersion`
+  - 每本最多 25 道，保存到 `Question/<主题>/<主题>-<时间戳>.json`（多本时追加 `-2`、`-3`）；根节点写 `plugin` / `pluginVersion`
   - 标准题型继续校验选项数量/答案 key；自定义题型只校验通用字段，`pluginData` 按插件 schema 校验
   - 页面下方列出已生成题库，答错的题同样进错题本；`Question/` 下的题库也会显示在「管理」页
 - 拍书出题
@@ -96,7 +96,7 @@
   - 整份做完、App 进入后台、页面销毁时立即 flush 并回拷到题库所在文件夹
   - 回拷失败时保留 `.dirty` 标记；下次打开题库先补回拷，仍失败就读副本，避免统计被旧源文件覆盖
 - 配置
-  - `config.json` 保存题库目录列表、连续打卡天数、上次打卡日期和 DeepSeek API Key（base64）
+  - `config.json` 保存题库目录列表、连续打卡天数、上次打卡日期和手写设置；DeepSeek API Key 优先存 Android Keystore / Windows DPAPI，不再写进 `config.json`
   - 配置和目录变化通过 `ValueNotifier` 全局广播
 
 ## 数据流
@@ -129,9 +129,13 @@ lib/
 │   ├── question_bank.dart          # 题库/题目/选项/统计/题型枚举 + QuestionCodec 编解码入口
 │   └── question_bank_file.dart     # 题库文件（名称 + 引用 + 所属目录）
 ├── services/
-│   ├── app_config.dart             # config.json 读写、全局 notifier
+│   ├── app_config.dart             # config.json 读写、全局 notifier、API Key 迁移
+│   ├── atomic_write.dart           # 临时文件 + .bak 的原子写/备份恢复
+│   ├── secret_store.dart           # Android Keystore / Windows DPAPI 封装（含测试用内存实现）
+│   ├── secret_redactor.dart        # 日志/错误文本里的 sk-... 脱敏
+│   ├── secure_screen.dart          # Android FLAG_SECURE 屏幕保护
 │   ├── question_bank_storage.dart  # 读取/保存/回拷题库文件（按来源隔离工作副本）
-│   ├── bank_io.dart                # 存储访问统一入口（SAF / 文件路径）
+│   ├── bank_io.dart                # 存储访问统一入口（SAF / 文件路径、路径边界校验）
 │   ├── bank_repository.dart        # 题库扫描统一入口（用户目录 + AI 题库、去重、缓存）
 │   ├── practice_progress.dart      # 断点续练：进度 JSON 的读写与清除
 │   ├── ref_hash.dart               # 题库来源的稳定哈希（工作副本 / 进度文件命名）
@@ -176,8 +180,9 @@ assets/plugins/standard/            # 内置 standard：manifest/HTML/JS/CSS/KaT
 docs/PLUGIN_DEVELOPMENT.md          # 第三方插件完整开发文档
 ```
 
-CI 配置在 `.github/workflows/flutter.yml`：push / PR 时跑 `flutter analyze` 和
-`flutter test --coverage`。
+CI 配置在 `.github/workflows/flutter.yml`：push / PR 时跑 `dart format` 检查、
+`flutter analyze`、`flutter test --coverage`，并在 Ubuntu 上编译一次 debug APK
+做冒烟。
 
 ## 快速开始
 
@@ -186,7 +191,7 @@ CI 配置在 `.github/workflows/flutter.yml`：push / PR 时跑 `flutter analyze
 - Flutter 3.47+ / Dart 3.13+
 - Android SDK 36（`compileSdk` 使用 Flutter 默认值）
 - JDK 17+
-- Visual Studio 2022（仅构建 Windows 桌面版需要，需勾选「使用 C++ 的桌面开发」）
+- Visual Studio 2022（仅构建 Windows 桌面版需要，需勾选「使用 C++ 的桌面开发」和 ATL；`flutter_secure_storage_windows` 依赖 ATL）
 
 ```bash
 cd tbank
@@ -264,10 +269,11 @@ build/windows/x64/runner/Release/
 
 ```json
 {
+  "configVersion": 2,
   "questionBankDirs": [],
   "clockOnNum": 0,
   "lastClockOnDate": "",
-  "dsApiKey": null
+  "dsApiKeyStorage": "secure"
 }
 ```
 
@@ -275,14 +281,22 @@ build/windows/x64/runner/Release/
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
+| `configVersion` | int | 配置格式版本；当前为 2 |
 | `questionBankDirs` | string[] | 题库目录引用列表：Android 为 SAF 的 `content://` URI，桌面为绝对路径 |
 | `clockOnNum` | int | 连续打卡天数，默认为 `0`；昨天打过则 +1，断签或首次打卡重置为 1 |
 | `lastClockOnDate` | string | 上次打卡日期，格式 `yyyy-MM-dd`，空字符串表示从未打卡 |
-| `dsApiKey` | string \| null | DeepSeek API Key，**base64 编码后**存储；`null` 表示未配置 |
+| `dsApiKeyStorage` | string | `secure` / `legacy` / `none` / `error`；正常情况为 `secure` |
+| `dsApiKey` | string \| null | **仅旧版兼容**：迁移失败时保留的 base64 Key；迁移成功后该字段会被删除 |
 
-已有旧配置没有 `lastClockOnDate` 时，会按空字符串处理，下一次打卡会从 1 重新开始。
+API Key 的迁移逻辑（`AppConfig._loadApiKey`）：
 
-注意：base64 只是编码不是加密，拿到 `config.json` 就能解回明文。
+1. 优先读 `SecretStore`（Android Keystore / Windows DPAPI）；
+2. secure 为空且 `config.json` 里有旧 base64 → 写入 secure 并读回校验，成功后删除旧字段与 `.bak`；
+3. 写入失败 → 保留旧字段，状态标为 `legacyFallback`，设置页提示；
+4. 两边都有 → secure 优先，清理旧字段；
+5. 配置文件读写使用 `AtomicWrite`（临时文件 + `.bak`），损坏时尝试从备份恢复，并把坏文件脱敏归档为 `config.bad.*`。
+
+旧版云备份/文件副本中的 Key 不会被自动删除；文档建议用户在升级后轮换 Key。
 
 ## 题库 JSON 格式
 
@@ -396,9 +410,11 @@ build/windows/x64/runner/Release/
 | `AppConfig.questionBankDirsNotifier` | 题库目录的 `ValueNotifier<List<String>>`，界面监听它自动刷新 |
 | `AppConfig.addQuestionBankDir(String)` | 追加目录（去重）并落盘 |
 | `AppConfig.removeQuestionBankDir(String)` | 删除目录并落盘 |
-| `AppConfig.dsApiKey` | 当前 DeepSeek API Key（内存中明文） |
-| `AppConfig.dsApiKeyNotifier` | API Key 的 `ValueNotifier<String?>` |
-| `AppConfig.setDsApiKey(String?)` | 设置或清除 Key，base64 编码后写入 `config.json` |
+| `AppConfig.dsApiKey` | 当前 DeepSeek API Key（仅请求层使用，内存缓存） |
+| `AppConfig.hasDsApiKey` | 是否已配置 Key（界面用这个，不拿明文） |
+| `AppConfig.dsApiKeyStatusNotifier` | Key 存储状态 `ValueNotifier<DsApiKeyStatus>` |
+| `AppConfig.setDsApiKey(String?)` | 写入/清除系统安全存储；返回 `bool`，失败不退回 base64 |
+| `AppConfig.loadWarning` / `lastSaveError` | 配置恢复/写盘失败的提示，设置页展示 |
 
 ### QuestionBankStorage（`lib/services/question_bank_storage.dart`）
 
@@ -412,8 +428,11 @@ build/windows/x64/runner/Release/
 
 ### BankRepository（`lib/services/bank_repository.dart`）
 
-题库扫描统一入口：并发列用户目录、合并 App 内置 AI 题库、按 uri 去重，
-默认 2 秒缓存；`listAll(refresh: true)` 强制重扫。管理页、统计页共用。
+题库扫描与统计统一入口：
+
+- `listAll()`：并发列用户目录、合并 App 内置 AI 题库、按 uri 去重；默认 2 秒缓存，`refresh: true` 强制重扫；
+- `loadStats(files)`：后台 isolate 解析每份题库的 `stats`，按 uri + mtime/size 缓存；管理页、统计页共用，避免同一份 JSON 反复全文解析；
+- `invalidateStats()`：目录/文件变化时清统计缓存。
 
 ### PracticeProgress（`lib/services/practice_progress.dart`）
 
@@ -773,7 +792,7 @@ kotlin.incremental=false
 
 `android/app/build.gradle.kts` 里写的是 `ndkVersion = flutter.ndkVersion`（默认 28.2.13676358）。
 
-当前依赖（`file_picker` / `path_provider` / `permission_handler`）都是纯 Java/Kotlin 插件，**没有 C/C++ 代码，所以本机不装 NDK 也能正常构建**。
+当前依赖里大部分是纯 Java/Kotlin 插件；`flutter_secure_storage_windows` 使用 Windows C++/ATL（不需要 NDK）。**本机不装 NDK 也能正常构建**，但 Windows 构建机需要安装 ATL 组件。
 
 只有当你引入带原生代码的插件（音视频、加解密、某些图像库等）时才会报 `NDK not configured`，那时再：
 
@@ -808,12 +827,14 @@ kotlin.incremental=false
   "id": "coding",
   "name": "代码测评",
   "version": "1.0.0",
-  "apiVersion": 1,
+  "apiVersion": 2,
   "types": ["coding"],
   "typeNames": {"coding": "代码题"},
   "typeDescriptions": {
     "coding": "代码题：correctAnswer 放参考代码，analysis 写关键步骤。"
   },
+  "capabilities": ["ai", "config", "toast"],
+  "networkHosts": ["api.example.com"],
   "description": "可选"
 }
 ```
@@ -822,9 +843,16 @@ kotlin.incremental=false
 `typeDescriptions` 会原样传给 AI 出题服务，App 不再硬编码题型说明。
 老插件没有后两个字段时，App 显示 id 并给通用出题说明。
 
+`apiVersion: 2` 起新增：
+
+- `capabilities`：`ai` / `pickImage` / `pen` / `readBank` / `fetch` / `clipboard` / `config` / `toast`；
+  未声明的高风险桥接口会被拒绝；`apiVersion: 1` 旧插件保持兼容；
+- `networkHosts`：`tbankFetch` 允许访问的域名（精确域名或 `.example.com` 后缀）；空数组表示禁止联网。
+
 内置 `standard` 随包发布，启动时由 `PluginManager.ensureBuiltin()` 把
 `assets/plugins/standard/` 下全部资源（manifest、HTML/JS/CSS、KaTeX）同步到
-插件目录；它不可卸载。
+插件目录；它不可卸载。同步会写 `.builtin-sync.json` 标记，版本和资源列表
+没变时跳过，避免每次启动重写约 7 MB 资源。
 
 ### 题库与错题本标记
 
@@ -838,7 +866,8 @@ kotlin.incremental=false
 
 - 设置 → 插件管理：列出插件、导入本地 `.zip`、从网络下载 `.zip`、卸载；
 - zip 内可以根目录直接放 `manifest.json`，也可以套一层 `<id>/`；
-- 校验 id、版本、API 版本、types、zip 路径穿越、大小/文件数；
+- 校验 id、版本、API 版本、types、zip 路径穿越、压缩包/解压后大小、文件数；
+- 下载只允许 https，边下边计数（20 MB 上限），不会先把超大包读进内存；
 - 同名非内置插件覆盖，内置 `standard` 拒绝覆盖和卸载；
   但 `standard` 允许安装**更高版本** zip 做热更新，启动时不会被随包旧资源覆盖；
 - 卸载不会删除题库/错题本，打开时提示安装对应插件。
@@ -864,12 +893,20 @@ App 通过统一桥接提供：
 | `tbankAiComplete` | 插件自己拼 Prompt，App 只负责鉴权/发送/返回文本 |
 | `tbankAiExplain` | 旧接口：宿主代调 AI 解析（App 内置 Prompt），保留兼容 |
 | `tbankAiScore` | App 内置主观题评分 Prompt 并解析，返回 0-10 |
-| `tbankReadBank` | 只读当前题库 JSON |
-| `tbankReadImage` | 读题库目录里的图片，返回 data URL |
-| `tbankFetch` | 宿主代理 http/https 请求（30s、1 MB 上限） |
-| `tbankClipboardRead` / `tbankClipboardWrite` | 剪贴板读写 |
-| `tbankPickImage` | 拍照/相册选图，返回 data URL |
-| `tbankToast` | 插件请求显示宿主 SnackBar |
+| `tbankReadBank` | 只读当前题库 JSON（v2 需声明 `readBank`） |
+| `tbankReadImage` | 读题库目录里的图片，返回 data URL（只允许纯文件名） |
+| `tbankFetch` | 宿主代理 https 请求（30s、1 MB 上限；v2 需声明 `fetch` + `networkHosts`） |
+| `tbankClipboardRead` / `tbankClipboardWrite` | 剪贴板读写（v2 需声明 `clipboard`） |
+| `tbankPickImage` | 拍照/相册选图，返回 data URL（v2 需声明 `pickImage`） |
+| `tbankToast` | 插件请求显示宿主 SnackBar（v2 需声明 `toast`） |
+
+安全边界：
+
+- Android 用 `NavigationDelegate.onNavigationRequest` 只允许插件目录内的 `file://`、`data:`、`blob:`；
+- Windows WebView2 0.4.0 没有导航拦截 API，使用 `deny popup + URL watchdog + CSP` 组合；
+- 插件页面加 CSP：`connect-src 'none'`，联网只能走宿主 `tbankFetch`；
+- 单条桥消息上限 2 MB；插件目录里的图片只接受 basename，拒绝 `../`；
+- 切到其它 tab 时宿主调用 `window.__tbankPause()`，返回时调用 `__tbankResume()`（插件可选实现）；Windows 同时 `suspend/resume` WebView。
 
 插件只负责渲染和判分逻辑；App 保留题库加载、统计、持久化、回拷和导航。
 widget 测试默认关闭 `PluginRuntime.enabled`，走原生 `PracticeQuestionView`，
@@ -889,7 +926,7 @@ widget 测试默认关闭 `PluginRuntime.enabled`，走原生 `PracticeQuestionV
 
 ```js
 window.__tbankConfigReceive({
-  plugin: { id, name, version, apiVersion, types },
+  plugin: { id, name, version, apiVersion, types, capabilities, networkHosts },
   config: { /* 当前配置 */ }
 })
 ```

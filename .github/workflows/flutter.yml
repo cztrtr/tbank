@@ -21,6 +21,9 @@ jobs:
       - name: 拉依赖
         run: flutter pub get
 
+      - name: 格式检查
+        run: dart format --output=none --set-exit-if-changed lib test
+
       - name: 静态检查
         run: flutter analyze
 
@@ -33,3 +36,23 @@ jobs:
           name: coverage-lcov
           path: coverage/lcov.info
           if-no-files-found: warn
+
+  build-apk-debug:
+    # 只做编译冒烟，验证 Android 侧（含安全存储插件）能正常打包。
+    runs-on: ubuntu-latest
+    needs: analyze-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.7'
+          channel: stable
+          cache: true
+
+      - name: 拉依赖
+        run: flutter pub get
+
+      - name: 编译 debug APK
+        run: flutter build apk --debug --no-pub

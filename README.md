@@ -77,7 +77,7 @@ TBank 是一个用 Flutter 编写的**本地题目练习 App**，支持 Android 
 - 输入**主题**（会作为题库文件夹名，如「大学物理学」）和**出题要求 / 知识点**，在出题页选择插件，再勾选该插件声明的题型，选择**题目数量**（5~100），点「生成 N 道题」
 - 题型、说明和 `pluginData` schema 都来自插件 manifest；standard 提供单选 / 多选 / 判断 / 填空（含名词解释、解答、证明）
 - 生成按题型配额进行，每个已选题型至少 1 道；失败题会优先重试，全部覆盖后才落盘
-- 题目按「**每本最多 25 道**」切分保存到 App 私有目录：`Question/<主题>/<主题>-<时间戳>-<批次>.json`，根节点写入 `plugin`，**格式与普通题库完全一致**（可用文本编辑器打开检查）
+- 题目按「**每本最多 25 道**」切分保存到 App 私有目录：`Question/<主题>/<主题>-<时间戳>.json`（多本时依次追加 `-2`、`-3`），根节点写入 `plugin`，**格式与普通题库完全一致**（可用文本编辑器打开检查）
 - 数量超过 25 时会自动分批生成并显示进度（每批 25 道，避免单次输出过长被截断）
 - 生成时尽量让选择题的正确答案在 A~E 上随机均匀分布，避免全部集中在某个选项
 - 页面下方列出已生成的题库（按主题分组），点开即可练习；答错的题同样会进入错题本
@@ -117,6 +117,9 @@ TBank 是一个用 Flutter 编写的**本地题目练习 App**，支持 Android 
 - 插件可通过 `config.html` 提供自己的配置页，配置保存在插件目录的 `config.json`；
 - 插件私有数据 `pluginData` 由 App 原样保存，插件可在练习时调用
   `tbankUpdatePluginData` 修改；
+- **插件 API v2**：manifest 新增 `capabilities`（ai / pickImage / pen / readBank / fetch / clipboard / config / toast）和 `networkHosts`。v2 插件未声明的能力会被拒绝；v1 旧插件保持兼容；
+- 插件页面只允许加载自己目录下的本地资源，不能跳转到远程站点；需要联网时通过宿主 `tbankFetch` 代理（域名白名单 + https）；
+- 插件切到其它 tab 时，宿主会调用 `window.__tbankPause()` / `__tbankResume()`（可选实现）；
 - 完整接口、manifest 和示例见 [插件开发指南](docs/PLUGIN_DEVELOPMENT.md)。
 
 ### 应用更新
@@ -175,8 +178,8 @@ AI 能力默认不启用，需要填自己的 DeepSeek API Key。不配也能正
 
 | 平台 | 文件 | 安装方式 |
 | --- | --- | --- |
-| Android | `TBank-v0.2.0-android.apk` | 直接安装 |
-| Windows | `TBank-v0.2.0-windows-x64.zip` | 解压后运行 `tbank.exe`，无需安装 |
+| Android | `TBank-v0.6.0-android.apk` | 直接安装 |
+| Windows | `TBank-v0.6.0-windows-x64.zip` | 解压后运行 `tbank.exe`，无需安装 |
 
 要求：
 
@@ -194,7 +197,7 @@ AI 能力默认不启用，需要填自己的 DeepSeek API Key。不配也能正
 | Dart | 3.13+ |
 | JDK | 17 |
 | Android SDK | compileSdk 36、build-tools 36.0.0 |
-| Visual Studio | 2022（仅构建 Windows 版需要，含「使用 C++ 的桌面开发」） |
+| Visual Studio | 2022（仅构建 Windows 版需要，含「使用 C++ 的桌面开发」和 ATL 组件） |
 
 ```bash
 git clone https://github.com/<your-name>/tbank.git
@@ -477,7 +480,7 @@ flutter build windows --release
 
 - **必须存成 UTF-8**，否则中文会乱码；用 VS Code 编辑会实时提示语法错误
 - **只能用英文引号 `"`**，中文引号 `"` `"` 会让 JSON 解析失败
-- **App 保存时会重写整个文件**：顶层除 `questions` 之外的字段（如你自己加的 `"title"`、`"author"`）会丢失，缩进也会统一成 2 个空格
+- **App 保存时会重写整个文件**：缩进会统一成 2 个空格；你自己加的顶层字段（如 `"title"`、`"author"`）和单题字段（如 `"tags"`、`"difficulty"`）会**原样保留**
 - **`id` 会被替换**：App 启动时（以及添加题库目录时）会把非 `q_` 前缀的 id 换成随机长字符串写回文件，进入「错题本」页时再兜底检查；之后原样保留，请不要再依赖手写的 `Q001` 做外部引用
 
 ## 隐私
@@ -487,7 +490,12 @@ flutter build windows --release
 - **不收集数据**：没有统计、没有崩溃上报、没有广告 SDK
 - **不申请任何存储权限**：题库读写通过 SAF 完成，只能访问你手动授权的文件夹
 - **唯一的网络权限是 `INTERNET`**：普通权限，安装时不弹窗，仅供 AI 功能访问 DeepSeek
-- **密钥存储**：以 base64 编码保存在 App 私有目录的 `config.json`——base64 只是编码不是加密，能读到该文件的人可以还原出明文
+- **密钥存储**：API Key 保存在系统安全存储里——Android 使用 Keystore 保护的密文，Windows 使用 DPAPI（当前用户）。`config.json` 不再保存 Key；旧版本的 base64 Key 会在启动时自动迁移，迁移失败才保留旧字段并在设置页警告
+- **禁止备份**：Android 已关闭自动备份/换机迁移，避免密文被恢复到没有 Keystore 私钥的设备上
+- **不泄露到界面/日志**：设置页只显示「已配置」，不显示 Key；请求错误文本会把 `sk-...` 脱敏
+- **插件拿不到 Key**：插件只能调用宿主代理的 `tbankAiComplete`，不能读取 Key、自定义 Authorization 或 Base URL
+- **旧备份**：升级前已经生成的云备份/文件副本不会被自动删除；如果担心旧 Key 泄露，升级后到 DeepSeek 控制台重新生成一个 Key，旧 Key 会自动失效
+- **卸载/清除数据会丢 Key**：Key 与当前设备/用户绑定，换机或重装后需要重新填写
 
 ## 常见问题
 
