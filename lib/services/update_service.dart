@@ -32,6 +32,9 @@ class UpdateService {
   /// 当前平台是否支持下载后直接拉起安装器。
   static bool get supportsInstall => !kIsWeb && Platform.isAndroid;
 
+  /// 更新包体积上限，防止填错地址把超大文件写满磁盘。
+  static const int _maxApkBytes = 300 * 1024 * 1024;
+
   /// 把用户输入整理成 APK 的下载地址。
   ///
   /// 支持三种写法：
@@ -55,6 +58,10 @@ class UpdateService {
     }
     if (base.host.isEmpty) {
       throw const UpdateException('地址格式不正确，请填完整域名');
+    }
+    // Android release 已禁止明文流量；桌面端也统一要求 TLS，避免更新包被替换。
+    if (base.scheme != 'https') {
+      throw const UpdateException('更新地址必须使用 https');
     }
 
     if (base.path.toLowerCase().endsWith('.apk')) {
@@ -88,6 +95,9 @@ class UpdateService {
       }
 
       final int? total = response.contentLength;
+      if (total != null && total > _maxApkBytes) {
+        throw const UpdateException('更新包太大（超过 300 MB），请检查地址');
+      }
       if (await file.exists()) {
         await file.delete();
       }
@@ -102,8 +112,11 @@ class UpdateService {
         await for (final List<int> chunk in response.stream.timeout(
           const Duration(minutes: 2),
         )) {
-          sink.add(chunk);
           received += chunk.length;
+          if (received > _maxApkBytes) {
+            throw const UpdateException('更新包太大（超过 300 MB），已中止下载');
+          }
+          sink.add(chunk);
           if (onProgress != null && throttle.elapsedMilliseconds >= 200) {
             throttle.reset();
             onProgress(received, total);

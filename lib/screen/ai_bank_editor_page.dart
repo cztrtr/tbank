@@ -296,7 +296,7 @@ class _AiBankEditorPageState extends State<AiBankEditorPage> {
   Future<void> _startAi(Set<int> indices, {required bool fix}) async {
     if (indices.isEmpty || _aiBusy != null) return;
 
-    if ((AppConfig.dsApiKey ?? '').trim().isEmpty) {
+    if (!AppConfig.hasDsApiKey) {
       _toast('请先到 设置 里填写 DeepSeek API Key');
       return;
     }
