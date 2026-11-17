@@ -17,13 +17,11 @@ import '../services/plugin_manager.dart';
 import '../services/practice_progress.dart';
 import '../services/question_bank_storage.dart';
 import '../services/study_history.dart';
-import 'answer_image_picker.dart';
 import 'practice_ai_service.dart';
 import 'practice_controller.dart';
+import 'practice_finished_view.dart';
+import 'practice_host.dart';
 import 'practice_persistence.dart';
-import 'practice_question_view.dart';
-import 'plugin_practice_view.dart';
-import '../services/plugin_runtime.dart';
 
 /// 练习页：加载题库、逐题作答、更新统计并回写文件。
 ///
@@ -32,13 +30,21 @@ import '../services/plugin_runtime.dart';
 /// - 当前题：_index / _selected / _showAnswer / _answered / _wasCorrect；
 /// - 整份进度：_finished / _answeredCount / _correctCount / _syncMessage。
 class PracticePage extends StatefulWidget {
-  const PracticePage({super.key, this.bank, this.active = true});
+  const PracticePage({
+    super.key,
+    this.bank,
+    this.active = true,
+    this.hostBuilder = defaultPracticeHostBuilder,
+  });
 
   /// 从题库管理页选中的题库文件；null 表示还没选。
   final QuestionBankFile? bank;
 
   /// 当前练习 tab 是否可见；切到其它 tab 时通知插件暂停计时器/渲染。
   final bool active;
+
+  /// 题型渲染器；默认是 WebView 插件宿主，测试可注入 fake host。
+  final PracticeHostBuilder hostBuilder;
 
   @override
   State<PracticePage> createState() => _PracticePageState();
@@ -51,9 +57,6 @@ class _PracticePageState extends State<PracticePage>
 
   QuestionBankStorage? get _storage => _persistence?.storage;
   QuestionBank? _questions; // 已读进内存的题库
-
-  /// 当前题库使用的插件 id；standard 走内置 WebView 插件。
-  String _pluginId = PluginManager.builtinId;
 
   /// 当前插件清单，用于校验插件私有数据和取 schema。
   PluginManifest? _pluginManifest;
@@ -76,18 +79,7 @@ class _PracticePageState extends State<PracticePage>
   bool get _wasCorrect => _controller.wasCorrect;
   set _wasCorrect(bool value) => _controller.wasCorrect = value;
 
-  bool _showAnswer = false; // 填空/解释是否已展示答案
-  bool _grading = false; // 是否正在等 AI 判分
   bool _aiFallback = false; // AI 判分不可用时，本题退回自判
-  int? _aiScore; // 本题的 AI 得分（0-10），仅主观题用
-  bool _aiAnalysisLoading = false; // 是否正在请求 AI 解析
-  String? _aiAnalysis; // 当前题的 AI 解析文本
-  String? _aiAnalysisError; // AI 解析失败原因
-  final TextEditingController _answerController =
-      TextEditingController(); // 主观题的作答输入
-
-  /// 学生拍照 / 上传的作答图片；AI 判分时会和文字答案一起发送。
-  final List<Uint8List> _answerImages = <Uint8List>[];
 
   bool get _finished => _controller.finished;
   set _finished(bool value) => _controller.finished = value;
@@ -148,7 +140,6 @@ class _PracticePageState extends State<PracticePage>
     QuestionBankStorage.sourceChangedNotifier.removeListener(
       _onBankSourceChanged,
     );
-    _answerController.dispose();
 
     // 页面销毁时先保存断点和待写副本，再尝试同步
     unawaited(_saveProgress());
@@ -195,7 +186,6 @@ class _PracticePageState extends State<PracticePage>
 
       // 一个题库只由一个插件处理；插件没装就提示，装了就走 WebView 宿主
       final String pluginId = bank.effectivePlugin;
-      _pluginId = pluginId;
       if (pluginId != PluginManager.builtinId &&
           !await PluginManager.isInstalled(pluginId)) {
         if (!mounted || token != _loadToken) return;
@@ -275,17 +265,9 @@ class _PracticePageState extends State<PracticePage>
   /// 重置“当前题”相关的临时状态，进入下一题时调用。
   void _resetQuestionState() {
     _selected.clear();
-    _answerController.clear();
-    _answerImages.clear();
-    _showAnswer = false;
     _answered = false;
     _wasCorrect = false;
-    _grading = false;
     _aiFallback = false;
-    _aiScore = null;
-    _aiAnalysisLoading = false;
-    _aiAnalysis = null;
-    _aiAnalysisError = null;
   }
 
   /// 记录一次作答：更新内存统计，并立刻写一次工作副本。
@@ -320,132 +302,6 @@ class _PracticePageState extends State<PracticePage>
     unawaited(_saveProgress());
   }
 
-  /// 把主观题作答交给 AI 判分：得分 >= 6 判为答对。
-  ///
-  /// 文字答案和拍照上传的作答图片至少有一项即可提交；
-  /// 判分失败（网络、Key 失效等）时提示并退回自判，保证这题还能继续做。
-  Future<void> _submitWithAi(Question question) async {
-    final String answer = _answerController.text.trim();
-    if ((answer.isEmpty && _answerImages.isEmpty) || _grading) return;
-
-    setState(() => _grading = true);
-    try {
-      final int score = await PracticeAiService.score(
-        question,
-        answer: answer,
-        answerImages: _answerImages,
-        sourceDirectoryRef: _storage?.sourceDirectoryRef,
-      );
-      if (!mounted) return;
-
-      _aiScore = score; // 先记分，_recordAnswer 的 setState 会一并刷新
-      _recordAnswer(score >= 6);
-    } on DsApiException catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('AI 判分失败：${error.message}')));
-      setState(() => _aiFallback = true); // 本题退回自判
-    } finally {
-      if (mounted) setState(() => _grading = false);
-    }
-  }
-
-  /// 选择作答图片：Android 支持拍照或相册，桌面端直接打开文件选择器。
-  Future<void> _pickAnswerImage() async {
-    if (_answerImages.length >= AnswerImagePicker.maxImages) {
-      _toast('最多上传 ${AnswerImagePicker.maxImages} 张作答图片');
-      return;
-    }
-
-    final bool isAndroid = defaultTargetPlatform == TargetPlatform.android;
-    final AnswerImageSource? source = isAndroid
-        ? await showModalBottomSheet<AnswerImageSource>(
-            context: context,
-            builder: (BuildContext sheetContext) => SafeArea(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  ListTile(
-                    leading: const Icon(Icons.photo_camera_outlined),
-                    title: const Text('拍照'),
-                    onTap: () =>
-                        Navigator.pop(sheetContext, AnswerImageSource.camera),
-                  ),
-                  ListTile(
-                    leading: const Icon(Icons.photo_library_outlined),
-                    title: const Text('从相册选择'),
-                    onTap: () =>
-                        Navigator.pop(sheetContext, AnswerImageSource.gallery),
-                  ),
-                ],
-              ),
-            ),
-          )
-        : AnswerImageSource.gallery;
-
-    if (!mounted || source == null) return;
-
-    try {
-      final Uint8List? bytes = await AnswerImagePicker.pick(source);
-      if (!mounted || bytes == null) return;
-
-      final int totalBytes =
-          _answerImages.fold<int>(
-            0,
-            (int sum, Uint8List existing) => sum + existing.length,
-          ) +
-          bytes.length;
-      if (totalBytes > AnswerImagePicker.maxTotalBytes) {
-        _toast('作答图片合计超过 10 MB，请删掉几张再试');
-        return;
-      }
-      setState(() => _answerImages.add(bytes));
-    } on AnswerImageException catch (error) {
-      if (mounted) _toast(error.message);
-    } catch (error) {
-      if (mounted) _toast('选择图片失败：$error');
-    }
-  }
-
-  void _toast(String message) {
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(message)));
-  }
-
-  /// 请求 AI 解析当前题目：把题干、选项（主观题为空）、正确答案，
-  /// 以及主观题的作答文字/作答图片（有图则带图）发给模型。
-  ///
-  /// 结果存在页面最下方的「AI 解析」框里；失败时在同一个框里显示原因并可重试。
-  Future<void> _requestAiAnalysis(Question question) async {
-    if (_aiAnalysisLoading) return;
-
-    setState(() {
-      _aiAnalysisLoading = true;
-      _aiAnalysisError = null;
-    });
-
-    try {
-      final String text = await PracticeAiService.explain(
-        question,
-        correctAnswer: _answerText(question),
-        // 主观题把作答也带上，AI 才能指出错在哪；判分后输入区收起但内容还在
-        userAnswer: question.isFillBlank ? _answerController.text : null,
-        answerImages: question.isFillBlank
-            ? _answerImages
-            : const <Uint8List>[],
-        sourceDirectoryRef: _storage?.sourceDirectoryRef,
-      );
-
-      if (!mounted) return;
-      setState(() => _aiAnalysis = text);
-    } on DsApiException catch (error) {
-      if (!mounted) return;
-      setState(() => _aiAnalysisError = error.message);
-    } finally {
-      if (mounted) setState(() => _aiAnalysisLoading = false);
-    }
-  }
-
   /// 安排一次防抖保存（防抖和串行写盘在 PracticePersistence 里）。
   void _schedulePersist() {
     final bank = _questions;
@@ -473,19 +329,6 @@ class _PracticePageState extends State<PracticePage>
       correctCount: _correctCount,
       answers: _answeredStates,
     );
-  }
-
-  /// 选择题提交：选中的集合必须和正确答案完全一致。
-  void _submitChoice() {
-    final bank = _questions;
-    if (bank == null) return;
-
-    final question = bank.questions[_index];
-    final correct =
-        question.correctAnswers.length == _selected.length &&
-        question.correctAnswers.every(_selected.contains);
-
-    _recordAnswer(correct);
   }
 
   /// 下一题；已经是最后一题就进入完成页并回拷源文件。
@@ -519,13 +362,11 @@ class _PracticePageState extends State<PracticePage>
     final answered = _answeredStates[index];
 
     setState(() {
-      _resetQuestionState(); // 清掉 AI 解析、输入框等临时状态
+      _resetQuestionState();
       _controller.goTo(index);
-
-      if (answered != null) {
-        _showAnswer = true; // 填空/解释：直接显示参考答案
-      }
     });
+    // answered 由 controller.goTo 恢复，供 host 显示只读回顾状态。
+    if (answered != null) _aiFallback = false;
 
     // 切题即记下断点，下次打开能停在这一题
     unawaited(_saveProgress());
@@ -606,137 +447,93 @@ class _PracticePageState extends State<PracticePage>
       return const Center(child: Text('这个题库里没有题目'));
     }
     if (_finished) {
-      return _buildFinished(bank);
+      return PracticeFinishedView(
+        total: bank.questions.length,
+        answeredCount: _answeredCount,
+        correctCount: _correctCount,
+        syncMessage: _syncMessage,
+        onRestart: _restart,
+      );
     }
 
     return _buildQuestion(bank, bank.questions[_index]);
   }
 
-  /// 单题界面：standard 和第三方插件都走 WebView 宿主；测试/关闭运行时走原生视图。
+  /// 单题界面：统一交给 [PracticeHostBuilder]（默认是 WebView 插件宿主）。
   Widget _buildQuestion(QuestionBank bank, Question question) {
-    if (PluginRuntime.enabled) {
-      return PluginPracticeView(
-        pluginId: _pluginId,
-        question: question,
-        index: _index,
-        total: bank.questions.length,
-        answered: _answered,
-        wasCorrect: _wasCorrect,
-        selected: _selected,
-        mistakeScore: question.mistakeScore,
-        isMistakeDone: question.isMistakeDone,
-        aiEnabled: !_aiFallback && AppConfig.hasDsApiKey,
-        correctAnswerText: _answerText(question),
-        sourceDirectoryRef: _storage?.sourceDirectoryRef,
-        bankFile: widget.bank,
-        plugin: _pluginManifest,
-        active: widget.active,
-        onSubmit: (bool correct, Set<String> selected) {
-          setState(() {
-            _selected
-              ..clear()
-              ..addAll(selected);
-          });
-          _recordAnswer(correct);
-        },
-        onNext: _next,
-        onPrevious: _previous,
-        onRequestAiExplain: (String answer) async {
-          if (!AppConfig.hasDsApiKey) {
-            return '未配置 DeepSeek API Key，请先到设置里填写。';
-          }
-          try {
-            return await PracticeAiService.explain(
-              question,
-              correctAnswer: _answerText(question),
-              userAnswer: answer,
-              answerImages: const <Uint8List>[],
-              sourceDirectoryRef: _storage?.sourceDirectoryRef,
-            );
-          } on DsApiException catch (error) {
-            return 'AI 解析失败：${error.message}';
-          } catch (error) {
-            return 'AI 解析失败：$error';
-          }
-        },
-        onRequestAiScore: (String answer, List<Uint8List> images) async {
-          if (!AppConfig.hasDsApiKey) {
-            throw DsApiException('未配置 DeepSeek API Key');
-          }
-          return PracticeAiService.score(
-            question,
-            answer: answer,
-            answerImages: images,
-            sourceDirectoryRef: _storage?.sourceDirectoryRef,
-          );
-        },
-        onRequestAiComplete: (String prompt, List<Uint8List> images) async {
-          if (!AppConfig.hasDsApiKey) {
-            throw DsApiException('未配置 DeepSeek API Key');
-          }
-          return PracticeAiService.complete(prompt: prompt, images: images);
-        },
-        onUpdatePluginData: (Map<String, dynamic> data) async {
-          final QuestionBank? bank = _questions;
-          if (bank == null || _index >= bank.questions.length) return;
-          final Question current = bank.questions[_index];
-          setState(() {
-            current.pluginData = Map<String, dynamic>.from(data);
-          });
-          // 走 400ms 防抖；插件频繁回写（手写/草稿）时不再每次都整份落盘。
-          _schedulePersist();
-        },
-      );
-    }
-
-    return PracticeQuestionView(
+    final PracticeHostData data = PracticeHostData(
+      bankFile: widget.bank,
+      plugin: _pluginManifest,
       question: question,
       index: _index,
       total: bank.questions.length,
-      selected: _selected,
       answered: _answered,
       wasCorrect: _wasCorrect,
-      showAnswer: _showAnswer,
-      grading: _grading,
+      active: widget.active,
       aiEnabled: !_aiFallback && AppConfig.hasDsApiKey,
-      aiScore: _aiScore,
-      aiAnalysisLoading: _aiAnalysisLoading,
-      aiAnalysis: _aiAnalysis,
-      aiAnalysisError: _aiAnalysisError,
-      answerController: _answerController,
-      answerImages: _answerImages,
+      isMistakeDone: question.isMistakeDone,
+      selected: _selected,
+      mistakeScore: question.mistakeScore,
       correctAnswerText: _answerText(question),
       sourceDirectoryRef: _storage?.sourceDirectoryRef,
-      onSelectOption: _selectOption,
-      onSubmitChoice: _submitChoice,
-      onSubmitAi: () => _submitWithAi(question),
-      onShowAnswer: () => setState(() => _showAnswer = true),
-      onSelfJudge: _recordAnswer,
-      onAnswerChanged: () => setState(() {}),
-      onPickImage: _pickAnswerImage,
-      onRemoveImage: (int index) =>
-          setState(() => _answerImages.removeAt(index)),
-      onRequestAiAnalysis: () => _requestAiAnalysis(question),
+      onSubmit: (bool correct, Set<String> selected) {
+        setState(() {
+          _selected
+            ..clear()
+            ..addAll(selected);
+        });
+        _recordAnswer(correct);
+      },
       onNext: _next,
       onPrevious: _previous,
+      onRequestAiExplain: (String answer) async {
+        if (!AppConfig.hasDsApiKey) {
+          return '未配置 DeepSeek API Key，请先到设置里填写。';
+        }
+        try {
+          return await PracticeAiService.explain(
+            question,
+            correctAnswer: _answerText(question),
+            userAnswer: answer,
+            answerImages: const <Uint8List>[],
+            sourceDirectoryRef: _storage?.sourceDirectoryRef,
+          );
+        } on DsApiException catch (error) {
+          return 'AI 解析失败：${error.message}';
+        } catch (error) {
+          return 'AI 解析失败：$error';
+        }
+      },
+      onRequestAiScore: (String answer, List<Uint8List> images) async {
+        if (!AppConfig.hasDsApiKey) {
+          throw DsApiException('未配置 DeepSeek API Key');
+        }
+        return PracticeAiService.score(
+          question,
+          answer: answer,
+          answerImages: images,
+          sourceDirectoryRef: _storage?.sourceDirectoryRef,
+        );
+      },
+      onRequestAiComplete: (String prompt, List<Uint8List> images) async {
+        if (!AppConfig.hasDsApiKey) {
+          throw DsApiException('未配置 DeepSeek API Key');
+        }
+        return PracticeAiService.complete(prompt: prompt, images: images);
+      },
+      onUpdatePluginData: (Map<String, dynamic> data) async {
+        final QuestionBank? bank = _questions;
+        if (bank == null || _index >= bank.questions.length) return;
+        final Question current = bank.questions[_index];
+        setState(() {
+          current.pluginData = Map<String, dynamic>.from(data);
+        });
+        // 走 400ms 防抖；插件频繁回写（手写/草稿）时不再每次都整份落盘。
+        _schedulePersist();
+      },
     );
-  }
 
-  /// 选择题点选：多选切换，单选/判断只留一个。
-  void _selectOption(String key) {
-    final bank = _questions;
-    if (bank == null) return;
-    final question = bank.questions[_index];
-
-    setState(() {
-      if (question.isMultipleChoice) {
-        if (!_selected.add(key)) _selected.remove(key);
-      } else {
-        _selected
-          ..clear()
-          ..add(key);
-      }
-    });
+    return widget.hostBuilder(context, data);
   }
 
   /// 把正确答案转成适合展示的文字：选择题带上选项内容。
@@ -756,56 +553,5 @@ class _PracticePageState extends State<PracticePage>
     return texts.isEmpty
         ? question.correctAnswers.join(' / ')
         : texts.join(' / ');
-  }
-
-  /// 完成页：本次成绩 + 回拷状态 + 再练一遍。
-  Widget _buildFinished(QuestionBank bank) {
-    final colorScheme = Theme.of(context).colorScheme;
-
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            Icon(
-              Icons.check_circle_outline,
-              size: 72,
-              color: colorScheme.primary,
-            ),
-            const SizedBox(height: 16),
-            Text(
-              '练习完成',
-              style: Theme.of(context).textTheme.titleLarge
-                  ?.copyWith(fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 10),
-            Text(
-              '共 ${bank.questions.length} 题，本次作答 $_answeredCount 题，答对 $_correctCount 题',
-              textAlign: TextAlign.center,
-            ),
-            if (_syncMessage != null) ...<Widget>[
-              const SizedBox(height: 8),
-              Text(
-                _syncMessage!,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ],
-            const SizedBox(height: 24),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton(
-                onPressed: _restart,
-                child: const Text('再练一遍'),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
   }
 }

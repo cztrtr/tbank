@@ -7,7 +7,6 @@ import 'services/app_config.dart';
 import 'services/mistake_books.dart';
 import 'services/pen_gesture.dart';
 import 'services/plugin_manager.dart';
-import 'services/plugin_runtime.dart';
 
 /// 应用入口。
 ///
@@ -22,9 +21,6 @@ Future<void> main() async {
 
   // 手写笔系统手势（小米焦点笔 Pro 的 195 双击等）：没有该硬件的设备上事件流为空。
   PenGesture.init();
-
-  // 正式包启用插件运行时；widget 测试默认关闭，继续用原生练习页
-  PluginRuntime.enabled = true;
 
   runApp(const MainApp()); // 配置就绪后再启动界面
 

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:tbank/models/question_bank_file.dart';
+import 'package:tbank/screen/practice_host.dart';
 import 'package:tbank/screen/practice_page.dart';
 
 /// 把 App 私有目录固定到临时文件夹，方便在桌面测试。
@@ -28,6 +29,113 @@ Future<void> _drainIo(WidgetTester tester, {int rounds = 50}) async {
       () => Future<void>.delayed(const Duration(milliseconds: 20)),
     );
     await tester.pump(const Duration(milliseconds: 50));
+  }
+}
+
+/// 测试用的轻量练习宿主：不依赖 WebView，只渲染按钮并调用 PracticeHostData 回调。
+class _FakePracticeHost extends StatefulWidget {
+  const _FakePracticeHost({required this.data});
+
+  final PracticeHostData data;
+
+  @override
+  State<_FakePracticeHost> createState() => _FakePracticeHostState();
+}
+
+class _FakePracticeHostState extends State<_FakePracticeHost> {
+  final Set<String> _selected = <String>{};
+  bool _showAnswer = false;
+
+  @override
+  void didUpdateWidget(covariant _FakePracticeHost oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.data.question.id != widget.data.question.id) {
+      _selected.clear();
+      _showAnswer = false;
+    }
+  }
+
+  bool get _correct {
+    final List<String> answers = widget.data.question.correctAnswers;
+    return answers.length == _selected.length &&
+        answers.every(_selected.contains);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final PracticeHostData data = widget.data;
+    final bool fillBlank = data.question.isFillBlank;
+    final bool answered = data.answered;
+
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: <Widget>[
+        Text('第 ${data.index + 1} / ${data.total} 题'),
+        const SizedBox(height: 8),
+        Text(data.question.question),
+        const SizedBox(height: 12),
+        if (!fillBlank)
+          for (final option in data.question.options)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton(
+                onPressed: answered
+                    ? null
+                    : () {
+                        setState(() {
+                          if (data.question.isMultipleChoice) {
+                            if (!_selected.add(option.key)) {
+                              _selected.remove(option.key);
+                            }
+                          } else {
+                            _selected
+                              ..clear()
+                              ..add(option.key);
+                          }
+                        });
+                      },
+                child: Text(option.text),
+              ),
+            ),
+        if (fillBlank && !answered && !_showAnswer)
+          FilledButton(
+            onPressed: () => setState(() => _showAnswer = true),
+            child: const Text('展示答案'),
+          ),
+        if (fillBlank && (_showAnswer || answered))
+          Text('参考答案：${data.correctAnswerText}'),
+        if (fillBlank && _showAnswer && !answered)
+          Row(
+            children: <Widget>[
+              TextButton(
+                onPressed: () => data.onSubmit(true, _selected),
+                child: const Text('答对了'),
+              ),
+              TextButton(
+                onPressed: () => data.onSubmit(false, _selected),
+                child: const Text('答错了'),
+              ),
+            ],
+          ),
+        if (!fillBlank && !answered)
+          FilledButton(
+            onPressed: () => data.onSubmit(_correct, _selected),
+            child: const Text('提交答案'),
+          ),
+        if (answered) Text(data.wasCorrect ? '回答正确' : '回答错误'),
+        if (answered && data.question.analysis.isNotEmpty)
+          Text(data.question.analysis),
+        if (_showAnswer || answered)
+          TextButton(onPressed: () {}, child: const Text('AI 解析')),
+        const SizedBox(height: 16),
+        Row(
+          children: <Widget>[
+            TextButton(onPressed: data.onPrevious, child: const Text('上一题')),
+            TextButton(onPressed: data.onNext, child: const Text('下一题')),
+          ],
+        ),
+      ],
+    );
   }
 }
 
@@ -110,6 +218,8 @@ void main() {
             directoryRef: bankDir,
             directoryName: '题库',
           ),
+          hostBuilder: (BuildContext context, PracticeHostData data) =>
+              _FakePracticeHost(data: data),
         ),
       ),
     );
@@ -155,7 +265,15 @@ void main() {
       directoryName: '题库2',
     );
 
-    await tester.pumpWidget(MaterialApp(home: PracticePage(bank: bank())));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PracticePage(
+          bank: bank(),
+          hostBuilder: (BuildContext context, PracticeHostData data) =>
+              _FakePracticeHost(data: data),
+        ),
+      ),
+    );
     await _drainIo(tester);
 
     // 第 1 题答对，切到第 2 题
@@ -175,7 +293,15 @@ void main() {
     await _drainIo(tester);
 
     // 重新进入：停在第 2 题，并提示恢复了进度
-    await tester.pumpWidget(MaterialApp(home: PracticePage(bank: bank())));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PracticePage(
+          bank: bank(),
+          hostBuilder: (BuildContext context, PracticeHostData data) =>
+              _FakePracticeHost(data: data),
+        ),
+      ),
+    );
     await _drainIo(tester);
     expect(find.textContaining('第 2 / 2 题'), findsOneWidget);
     expect(find.text('已恢复上次练习进度（第 2 题）'), findsOneWidget);
