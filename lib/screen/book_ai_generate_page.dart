@@ -4,11 +4,16 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
+import 'ai_bank_list.dart';
+
+import '../models/question_bank_file.dart';
 import '../services/ai_question_generator.dart';
+import '../services/bank_io.dart';
 import '../services/ds_api_service.dart';
 import '../services/plugin_manager.dart';
 import '../services/question_quality.dart';
 import 'plugin_type_selector.dart';
+import 'practice_page.dart';
 
 /// 拍书出题页。
 ///
@@ -648,127 +653,38 @@ class _BookAiGeneratePageState extends State<BookAiGeneratePage> {
             ),
           ),
           const SizedBox(height: 8),
-          ..._buildBankList(colorScheme),
+          AiBankList(
+            banks: _banks,
+            loading: _loadingBanks,
+            error: _banksError,
+            emptyText: '还没有生成过题库',
+            onOpen: _openBank,
+            onDelete: _deleteBank,
+            deletingPath: _deletingPath,
+            subtitleBuilder: (AiBankInfo bank) =>
+                '${bank.questionCount} 题 · ${_formatTime(bank.modifiedAt)}',
+          ),
         ],
       ),
     );
   }
 
-  /// 页面下方的已生成题库列表：按目录分组，每行可彻底删除。
-  List<Widget> _buildBankList(ColorScheme colorScheme) {
-    if (_loadingBanks) {
-      return <Widget>[
-        const Padding(
-          padding: EdgeInsets.all(24),
-          child: Center(child: CircularProgressIndicator()),
-        ),
-      ];
-    }
-
-    if (_banksError != null) {
-      return <Widget>[
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: colorScheme.errorContainer,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Text(
-            _banksError!,
-            style: TextStyle(fontSize: 13, color: colorScheme.onErrorContainer),
-          ),
-        ),
-      ];
-    }
-
-    if (_banks.isEmpty) {
-      return <Widget>[
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 20),
-          child: Center(
-            child: Text(
-              '还没有生成过题库',
-              style: TextStyle(color: colorScheme.onSurfaceVariant),
-            ),
-          ),
-        ),
-      ];
-    }
-
-    // 按「一级目录 / 二级目录」分组，顺序与 listBanks 一致
-    final Map<String, List<AiBankInfo>> groups = <String, List<AiBankInfo>>{};
-    for (final AiBankInfo bank in _banks) {
-      groups.putIfAbsent(bank.topic, () => <AiBankInfo>[]).add(bank);
-    }
-
-    return <Widget>[
-      for (final MapEntry<String, List<AiBankInfo>> group
-          in groups.entries) ...<Widget>[
-        Padding(
-          padding: const EdgeInsets.fromLTRB(0, 12, 0, 4),
-          child: Row(
-            children: <Widget>[
-              Icon(
-                Icons.folder_outlined,
-                size: 18,
-                color: colorScheme.onSurfaceVariant,
-              ),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  group.key,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-        for (final AiBankInfo bank in group.value)
-          Padding(
-            padding: const EdgeInsets.only(left: 6),
-            child: ListTile(
-              contentPadding: const EdgeInsets.symmetric(horizontal: 8),
-              leading: Icon(Icons.quiz_outlined, color: colorScheme.primary),
-              title: Text(
-                bank.displayName,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              subtitle: Text(
-                '${bank.questionCount} 题 · ${_formatTime(bank.modifiedAt)}',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: colorScheme.onSurfaceVariant,
-                ),
-              ),
-              trailing: IconButton(
-                tooltip: '彻底删除',
-                onPressed: _deletingPath == bank.path
-                    ? null
-                    : () => _deleteBank(bank),
-                icon: _deletingPath == bank.path
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : Icon(
-                        Icons.delete_outline,
-                        size: 20,
-                        color: colorScheme.error,
-                      ),
+  /// 打开一份已生成的题库练习；返回后刷新列表。
+  void _openBank(AiBankInfo bank) {
+    Navigator.of(context)
+        .push(
+          MaterialPageRoute<void>(
+            builder: (_) => PracticePage(
+              bank: QuestionBankFile(
+                name: bank.fileName,
+                uri: bank.path,
+                directoryRef: BankIo.directoryOfFile(bank.path),
+                directoryName: bank.topic,
               ),
             ),
           ),
-      ],
-    ];
+        )
+        .then((_) => _loadBanks());
   }
 
   /// 彻底删除一份已生成的题库：二次确认后删文件，并清理空目录。

@@ -340,52 +340,55 @@ class _MistakeBooksPageState extends State<MistakeBooksPage> {
           .add(book);
     }
 
-    return ListView(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      children: <Widget>[
-        for (final MapEntry<
-              String,
-              Map<String, Map<String, List<MistakeBookInfo>>>
-            >
-            parent
-            in tree.entries) ...<Widget>[
-          // 父文件夹标题（同一父级只画一次）
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
-            child: Row(
-              children: <Widget>[
-                Icon(
-                  Icons.folder_open_outlined,
-                  size: 20,
-                  color: colorScheme.primary,
-                ),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    parentLabels[parent.key]!,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700,
-                      color: colorScheme.onSurface,
-                    ),
+    final List<WidgetBuilder> rows = <WidgetBuilder>[];
+    for (final MapEntry<String, Map<String, Map<String, List<MistakeBookInfo>>>>
+        parent
+        in tree.entries) {
+      // 父文件夹标题（同一父级只画一次）
+      rows.add(
+        (BuildContext context) => Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+          child: Row(
+            children: <Widget>[
+              Icon(
+                Icons.folder_open_outlined,
+                size: 20,
+                color: colorScheme.primary,
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  parentLabels[parent.key]!,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    color: colorScheme.onSurface,
                   ),
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
+        ),
+      );
 
-          for (final MapEntry<String, Map<String, List<MistakeBookInfo>>>
-              rootEntry
-              in parent.value.entries)
-            ..._buildRootSection(
-              colorScheme,
-              virtualParents.contains(parent.key),
-              rootEntry,
-            ),
-        ],
-      ],
+      for (final MapEntry<String, Map<String, List<MistakeBookInfo>>> rootEntry
+          in parent.value.entries) {
+        rows.addAll(
+          _buildRootSection(
+            colorScheme,
+            virtualParents.contains(parent.key),
+            rootEntry,
+          ),
+        );
+      }
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      itemCount: rows.length,
+      itemBuilder: (BuildContext context, int index) => rows[index](context),
     );
   }
 
@@ -393,17 +396,17 @@ class _MistakeBooksPageState extends State<MistakeBooksPage> {
   ///
   /// 递归题库的分组名是「根目录/子目录」，同一个根目录的多个子目录会合并到
   /// 这里，避免「细胞生物学」重复出现；AI 题库的「主题/子主题」保持原样。
-  List<Widget> _buildRootSection(
+  List<WidgetBuilder> _buildRootSection(
     ColorScheme colorScheme,
     bool virtualParent,
     MapEntry<String, Map<String, List<MistakeBookInfo>>> rootEntry,
   ) {
-    final List<Widget> children = <Widget>[];
+    final List<WidgetBuilder> children = <WidgetBuilder>[];
 
     // 添加的题库目录标题（没有父级时省略，避免和父标题重复）
     if (!virtualParent) {
       children.add(
-        Padding(
+        (BuildContext context) => Padding(
           padding: const EdgeInsets.fromLTRB(30, 10, 16, 2),
           child: Row(
             children: <Widget>[
@@ -444,7 +447,7 @@ class _MistakeBooksPageState extends State<MistakeBooksPage> {
       // 最后一级子目录标题，例如「细胞生物学」下面的「1_绪论」
       if (subDirectory.isNotEmpty) {
         children.add(
-          Padding(
+          (BuildContext context) => Padding(
             padding: const EdgeInsets.fromLTRB(44, 8, 16, 2),
             child: Row(
               children: <Widget>[
@@ -474,7 +477,7 @@ class _MistakeBooksPageState extends State<MistakeBooksPage> {
 
       for (final MistakeBookInfo book in bySubDirectory[subDirectory]!) {
         children.add(
-          Padding(
+          (BuildContext context) => Padding(
             padding: EdgeInsets.only(
               left: virtualParent ? 12 : (subDirectory.isEmpty ? 44 : 56),
             ),

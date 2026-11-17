@@ -7,6 +7,7 @@ import '../services/ds_api_service.dart';
 import '../services/plugin_manager.dart';
 import '../services/question_quality.dart';
 import 'ai_bank_editor_page.dart';
+import 'ai_bank_list.dart';
 import 'plugin_type_selector.dart';
 import 'practice_page.dart';
 
@@ -390,92 +391,15 @@ class _AiGeneratePageState extends State<AiGeneratePage> {
             style: textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: 4),
-          ..._buildBankList(colorScheme),
+          AiBankList(
+            banks: _banks,
+            loading: _loadingBanks,
+            emptyText: '还没有生成过题目',
+            onOpen: _openBank,
+            onEdit: _openEditor,
+          ),
         ],
       ),
     );
-  }
-
-  /// 已生成的题库列表：按主题分组，点击进入练习。
-  List<Widget> _buildBankList(ColorScheme colorScheme) {
-    if (_loadingBanks) {
-      return <Widget>[
-        const Padding(
-          padding: EdgeInsets.all(24),
-          child: Center(child: CircularProgressIndicator()),
-        ),
-      ];
-    }
-
-    if (_banks.isEmpty) {
-      return <Widget>[
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 20),
-          child: Center(
-            child: Text(
-              '还没有生成过题目',
-              style: TextStyle(color: colorScheme.onSurfaceVariant),
-            ),
-          ),
-        ),
-      ];
-    }
-
-    final Map<String, List<AiBankInfo>> groups = <String, List<AiBankInfo>>{};
-    for (final AiBankInfo bank in _banks) {
-      groups.putIfAbsent(bank.topic, () => <AiBankInfo>[]).add(bank);
-    }
-
-    return <Widget>[
-      for (final MapEntry<String, List<AiBankInfo>> group
-          in groups.entries) ...<Widget>[
-        Padding(
-          padding: const EdgeInsets.fromLTRB(0, 12, 0, 4),
-          child: Row(
-            children: <Widget>[
-              Icon(
-                Icons.folder_outlined,
-                size: 18,
-                color: colorScheme.onSurfaceVariant,
-              ),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  group.key,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-        for (final AiBankInfo bank in group.value)
-          Padding(
-            padding: const EdgeInsets.only(left: 6),
-            child: ListTile(
-              contentPadding: const EdgeInsets.symmetric(horizontal: 8),
-              leading: Icon(Icons.quiz_outlined, color: colorScheme.primary),
-              title: Text(
-                bank.displayName,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              subtitle: Text('${bank.questionCount} 题'),
-              trailing: IconButton(
-                tooltip: '管理题目',
-                // 增删改查 + 选中题目让 AI 重新出题 / 纠正错误
-                onPressed: () => _openEditor(bank),
-                icon: const Icon(Icons.edit_note, size: 20),
-              ),
-              onTap: () => _openBank(bank),
-            ),
-          ),
-      ],
-    ];
   }
 }
