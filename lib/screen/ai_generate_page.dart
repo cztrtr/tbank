@@ -168,7 +168,9 @@ class _AiGeneratePageState extends State<AiGeneratePage> {
         (int sum, AiBankInfo bank) => sum + bank.questionCount,
       );
       final QuestionQualityReport? quality = _quality;
-      final String qualityText = quality != null && quality.hasIssues
+      final String qualityText =
+          quality != null &&
+              (quality.hasIssues || quality.warnings.isNotEmpty)
           ? '；${quality.summary}'
           : '';
       _toast('已生成 $totalQuestions 道题，保存为 ${banks.length} 本$qualityText');

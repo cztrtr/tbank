@@ -259,12 +259,44 @@ class _BookAiGeneratePageState extends State<BookAiGeneratePage> {
       );
       if (!mounted) return;
 
+      // 先把图片识别成文字/考点，再走纯文本批量生成：
+      // 否则每个题型、每次重试都会重新上传同一组图片，费用和时间都会翻倍。
+      String imageNotes = '';
+      try {
+        imageNotes = await DsApiService.extractImageNotes(
+          images: _images,
+          requirements: _requirementsController.text,
+        );
+      } on DsApiException catch (error) {
+        // 识别失败不直接终止：退回「每次请求带图」的旧路径，保证可用。
+        debugPrint('图片识别失败，回退到带图生成：${error.message}');
+      }
+      if (!mounted) return;
+
+      final String requirementText = imageNotes.isEmpty
+          ? _requirementsController.text
+          : '${_requirementsController.text}\n\n'
+                '图片识别内容（出题时请参考）：\n$imageNotes';
+
       final List<Map<String, dynamic>> questions =
           await AiQuestionGenerator.generateWithCoverage(
             plugin: plugin,
             types: selectedTypes,
             target: _count,
             request: (PluginTypeInfo type, int count) {
+              if (imageNotes.isNotEmpty) {
+                return DsApiService.generateQuestions(
+                  topic: _topicController.text.trim().isEmpty
+                      ? '拍书出题'
+                      : _topicController.text.trim(),
+                  requirements: requirementText,
+                  types: <String>[type.id],
+                  count: count,
+                  typeSpec: AiQuestionGenerator.buildTypeSpec(<PluginTypeInfo>[
+                    type,
+                  ]),
+                );
+              }
               return DsApiService.generateQuestionsFromImages(
                 images: _images,
                 requirements: _requirementsController.text,
@@ -311,7 +343,9 @@ class _BookAiGeneratePageState extends State<BookAiGeneratePage> {
       if (!mounted) return;
       setState(() => _saved = saved);
       final QuestionQualityReport? quality = _quality;
-      final String qualityText = quality != null && quality.hasIssues
+      final String qualityText =
+          quality != null &&
+              (quality.hasIssues || quality.warnings.isNotEmpty)
           ? '；${quality.summary}'
           : '';
       _toast('已生成 ${questions.length} 道题，保存为 ${saved.length} 个文件$qualityText');

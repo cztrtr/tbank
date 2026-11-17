@@ -20,6 +20,8 @@ import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../models/question_bank_file.dart';
+import 'atomic_write.dart';
+import 'bank_io.dart';
 import 'ds_api_service.dart';
 import 'plugin_manager.dart';
 import 'plugin_schema.dart';
@@ -209,18 +211,48 @@ class AiQuestionGenerator {
         .toList();
   }
 
+  /// AI 题库题数缓存：path → (mtime, size, 题数)。
+  ///
+  /// 管理页、统计页、错题本都会扫 AI 题库；题数只用于展示，没有必要
+  /// 每次把整份 JSON 重新解析一遍。
+  static final Map<String, ({int modified, int size, int count})>
+  _bankInfoCache = <String, ({int modified, int size, int count})>{};
+
   /// 读取单个文件的题数与修改时间；不是 `.json` 时返回 null。
   static Future<AiBankInfo?> _bankInfoFrom(File file, String groupName) async {
     if (!file.path.toLowerCase().endsWith('.json')) return null;
 
-    int count = 0;
+    final FileStat stat;
     try {
-      final dynamic decoded = jsonDecode(await file.readAsString());
-      if (decoded is Map && decoded['questions'] is List) {
-        count = (decoded['questions'] as List).length;
+      stat = await file.stat();
+    } catch (error) {
+      debugPrint('读取 AI 题库文件信息失败：${error.runtimeType}');
+      return null;
+    }
+
+    int count = 0;
+    final int modified = stat.modified.millisecondsSinceEpoch;
+    final int size = stat.size;
+    final ({int modified, int size, int count})? cached =
+        _bankInfoCache[file.path];
+    if (cached != null && cached.modified == modified && cached.size == size) {
+      count = cached.count;
+    } else {
+      try {
+        final dynamic decoded = jsonDecode(
+          BankIo.stripBom(await file.readAsString()),
+        );
+        if (decoded is Map && decoded['questions'] is List) {
+          count = (decoded['questions'] as List).length;
+        }
+      } catch (_) {
+        // 文件损坏：仍列出，题数显示 0
       }
-    } catch (_) {
-      // 文件损坏：仍列出，题数显示 0
+      _bankInfoCache[file.path] = (
+        modified: modified,
+        size: size,
+        count: count,
+      );
     }
 
     return AiBankInfo(
@@ -228,7 +260,7 @@ class AiQuestionGenerator {
       fileName: file.path.split(Platform.pathSeparator).last,
       path: file.path,
       questionCount: count,
-      modifiedAt: (await file.stat()).modified,
+      modifiedAt: stat.modified,
     );
   }
 
@@ -299,7 +331,8 @@ class AiQuestionGenerator {
       );
     }
 
-    final String? typeSpec = null;
+    // 一次生成共用同一个基名；批次用 -2/-3 后缀，避免覆盖已有题库。
+    final String baseName = await reserveBaseName(topic: topic);
     int finished = 0;
     int batchIndex = 0;
     final QuestionQualityReport quality = QuestionQualityReport();
@@ -315,7 +348,6 @@ class AiQuestionGenerator {
         requirements: requirements,
         types: types,
         count: batchCount,
-        typeSpec: typeSpec,
       );
 
       final List<Map<String, dynamic>> parsedQuestions = parseQuestions(
@@ -351,6 +383,7 @@ class AiQuestionGenerator {
       saved.add(
         await _saveBook(
           topic: topic,
+          baseName: baseName,
           questions: batchQuestions,
           index: batchIndex,
           plugin: plugin?.id,
@@ -396,12 +429,14 @@ class AiQuestionGenerator {
     }
 
     final List<AiBankInfo> saved = <AiBankInfo>[];
+    final String baseName = await reserveBaseName(topic: topic);
     for (int start = 0; start < questions.length; start += perBook) {
       final int end = (start + perBook).clamp(0, questions.length);
       final int index = saved.length + 1;
       saved.add(
         await _saveBook(
           topic: topic,
+          baseName: baseName,
           questions: questions.sublist(start, end),
           index: index,
           plugin: plugin.id,
@@ -457,66 +492,73 @@ class AiQuestionGenerator {
         calls++;
 
         final int need = quota - produced;
-        final String raw = await request(type, need > perBook ? perBook : need);
-        final List<Map<String, dynamic>> parsed = parseQuestions(
-          raw,
-          allowedTypes: plugin.types.toSet(),
-          plugin: plugin,
-        );
-        final List<Map<String, dynamic>> matched = parsed
-            .where((Map<String, dynamic> q) => q['type'] == type.id)
-            .toList();
-        final List<Map<String, dynamic>> clean = QuestionQuality.sanitizeBatch(
-          questions: matched,
-          seen: seenQuestions,
-          report: quality,
-        );
-        final int take = clean.length > need ? need : clean.length;
-        for (int i = 0; i < take; i++) {
-          questions.add(clean[i]);
-          produced++;
-          finished++;
-          onProgress?.call(finished, target);
+        try {
+          final String raw = await request(
+            type,
+            need > perBook ? perBook : need,
+          );
+          final List<Map<String, dynamic>> parsed = parseQuestions(
+            raw,
+            allowedTypes: plugin.types.toSet(),
+            plugin: plugin,
+          );
+          final List<Map<String, dynamic>> matched = parsed
+              .where((Map<String, dynamic> q) => q['type'] == type.id)
+              .toList();
+          final List<Map<String, dynamic>> clean =
+              QuestionQuality.sanitizeBatch(
+                questions: matched,
+                seen: seenQuestions,
+                report: quality,
+              );
+          final int take = clean.length > need ? need : clean.length;
+          for (int i = 0; i < take; i++) {
+            questions.add(clean[i]);
+            produced++;
+            finished++;
+            onProgress?.call(finished, target);
+          }
+        } on DsApiException catch (error) {
+          // 网络/截断/JSON 解析失败也消耗一次重试；不要直接丢掉整轮。
+          quality.addWarning('题型「${type.name}」生成失败：${error.message}');
+          if (calls >= maxCallsPerType) break;
         }
+      }
+
+      if (produced < quota) {
+        // 已生成的题保留；只记录缺口，由页面提示用户。
+        quality.addWarning(
+          '题型「${type.name}」只生成 $produced/$quota 道',
+        );
       }
     }
 
     onQuality?.call(quality);
+    if (questions.isEmpty) {
+      throw DsApiException('没有生成有效题目，请检查网络/题型设置后重试');
+    }
     return questions;
   }
 
-  /// 把一批题目写成一个题库文件：`<主题>-<时间戳>-<批次>.json`。
+  /// 把一批题目写成一个题库文件。
+  ///
+  /// 复用 [saveBatchTo] 的唯一命名逻辑：同一基名重复生成时自动追加
+  /// `-2`、`-3`，不会因为同一秒内两次生成而覆盖旧题库。
   static Future<AiBankInfo> _saveBook({
     required String topic,
+    required String baseName,
     required List<Map<String, dynamic>> questions,
     required int index,
     String? plugin,
     int? pluginVersion,
-  }) async {
-    final Directory topicDir = await ensureTopicDir(topic);
-    final String safeTopic = sanitizeTopic(topic);
-    final String fileName = '$safeTopic-${_timestamp()}-$index.json';
-    final File file = File(
-      '${topicDir.path}${Platform.pathSeparator}$fileName',
-    );
-
-    final Map<String, dynamic> json = <String, dynamic>{};
-    if (plugin != null && plugin.isNotEmpty) {
-      json['plugin'] = plugin;
-      json['pluginVersion'] = pluginVersion ?? 1;
-    }
-    json['questions'] = questions;
-    final String content = const JsonEncoder.withIndent('  ').convert(json);
-    await file.writeAsString(content, flush: true);
-
-    // 如果主题目录名与用户输入的原始主题不同，以实际目录名为准
-    final String actualTopic = topicDir.path.split(Platform.pathSeparator).last;
-    return AiBankInfo(
-      topic: actualTopic,
-      fileName: fileName,
-      path: file.path,
-      questionCount: questions.length,
-      modifiedAt: DateTime.now(),
+  }) {
+    return saveBatchTo(
+      topic: topic,
+      baseName: baseName,
+      questions: questions,
+      batchIndex: index,
+      plugin: plugin,
+      pluginVersion: pluginVersion,
     );
   }
 
@@ -557,7 +599,7 @@ class AiQuestionGenerator {
     }
     json['questions'] = questions;
     final String content = const JsonEncoder.withIndent('  ').convert(json);
-    await file.writeAsString(content, flush: true);
+    await AtomicWrite.writeText(file.path, content);
 
     // 与 listBanks 保持一致：子目录文件的分组名是「主题/子主题」
     final String safeTopic = sanitizeTopic(topic);

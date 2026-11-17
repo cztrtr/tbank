@@ -82,6 +82,7 @@ class DsApiService {
     void Function(String delta)? onDelta,
     void Function(String delta)? onReasoning,
     Duration timeout = _defaultTimeout,
+    int maxTokens = 4096,
   }) async {
     final String apiKey = (AppConfig.dsApiKey ?? '').trim();
     if (apiKey.isEmpty) {
@@ -94,6 +95,9 @@ class DsApiService {
         <String, dynamic>{'role': 'user', 'content': content},
       ],
       'stream': stream,
+      // 显式限制输出长度：不设置时服务端默认值可能把长 JSON 截断，
+      // 表现为「AI 返回的不是合法 JSON」。
+      'max_tokens': maxTokens,
       'thinking': <String, String>{'type': thinking ? 'enabled' : 'disabled'},
     };
 
@@ -310,6 +314,7 @@ $rules
       stream: false,
       thinking: false,
       timeout: _generationTimeout,
+      maxTokens: 8192,
     );
   }
 
@@ -386,6 +391,7 @@ $rules
       stream: false,
       thinking: false,
       timeout: _generationTimeout,
+      maxTokens: 8192,
     );
   }
 
@@ -445,7 +451,59 @@ $rules
       stream: false,
       thinking: false,
       timeout: _generationTimeout,
+      maxTokens: 8192,
     );
+  }
+
+  /// 把用户拍摄的教材图片识别成文字/考点摘要。
+  ///
+  /// 拍书出题会先调用一次，再把摘要交给纯文本批量生成；这样同一组图片
+  /// 不必在每个题型/每次重试时重复上传。识别失败由调用方回退到带图生成。
+  static Future<String> extractImageNotes({
+    required List<Uint8List> images,
+    required String requirements,
+  }) async {
+    final List<Uint8List> valid = images
+        .where((Uint8List bytes) => bytes.isNotEmpty)
+        .toList();
+    if (valid.isEmpty) {
+      throw DsApiException('请先拍照或选择图片');
+    }
+
+    final String extra = requirements.trim().isEmpty
+        ? '（未填写额外要求）'
+        : requirements.trim();
+    final String prompt =
+        '''
+你是教材内容识别助手。下面附上用户拍摄的教材/课件图片，请完成两件事：
+1. 识别图片里是「题目」还是「知识点讲解」；
+2. 把与出题有关的内容整理成简洁的中文文字（题干、条件、公式、考点、答案线索）。
+
+用户补充要求：$extra
+
+要求：
+- 不要直接出题，不要输出 JSON，不要 Markdown 代码围栏；
+- 数学式用 LaTeX：行内 \$...\$，独立公式 \$\$...\$\$；
+- 图片模糊或无法识别时，说明哪部分无法识别，不要编造；
+- 控制在 1500 字以内。
+''';
+
+    final String raw = await _send(
+      _withImages(
+        prompt,
+        answerImages: valid,
+        answerImagesLabel: '用户拍摄的图片',
+      ),
+      stream: false,
+      thinking: false,
+      timeout: _defaultTimeout,
+      maxTokens: 2048,
+    );
+    final String text = raw.trim();
+    if (text.isEmpty) {
+      throw DsApiException('AI 未能识别图片内容');
+    }
+    return text;
   }
 
   /// 从模型输出里解析知识点列表，容忍代码围栏与多余文字。

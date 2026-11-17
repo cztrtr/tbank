@@ -28,6 +28,12 @@ class DsStreamDelta {
 class DsTransport {
   DsTransport._();
 
+  /// 复用同一个 Client：AI 请求通常连续多次，复用连接可以省掉重复 TLS 握手。
+  static final http.Client _client = http.Client();
+
+  /// 对 429/5xx 做有限重试；总次数（含首次）= 3。
+  static const int _maxAttempts = 3;
+
   /// 非流式请求：一次性拿到完整回答。
   static Future<String> chatOnce(
     Uri uri,
@@ -36,11 +42,15 @@ class DsTransport {
     void Function(String delta)? onReasoning,
     Duration timeout,
   ) async {
-    final http.Client client = http.Client();
+    final http.Client client = _client;
     try {
-      final http.Response response = await client
-          .post(uri, headers: headers, body: jsonEncode(payload))
-          .timeout(timeout);
+      final http.Response response = await _postWithRetry(
+        client,
+        uri,
+        headers,
+        payload,
+        timeout,
+      );
 
       final String body = utf8.decode(response.bodyBytes, allowMalformed: true);
 
@@ -62,6 +72,14 @@ class DsTransport {
           body: SecretRedactor.redact(body),
         );
       }
+      // 输出被 max_tokens 截断时，JSON 往往缺右括号；明确报错，
+      // 让出题器可以缩小批量后重试。
+      if (_extractFinishReason(json) == 'length') {
+        throw DsApiException(
+          'DeepSeek 输出被截断，请重试或减少一次生成的题数',
+          body: SecretRedactor.redact(body),
+        );
+      }
       return content;
     } on DsApiException {
       rethrow;
@@ -71,8 +89,6 @@ class DsTransport {
       throw DsApiException('网络请求失败：${error.message}');
     } catch (error) {
       throw DsApiException('请求失败：$error');
-    } finally {
-      client.close();
     }
   }
 
@@ -85,7 +101,7 @@ class DsTransport {
     void Function(String delta)? onReasoning,
     Duration timeout,
   ) async {
-    final http.Client client = http.Client();
+    final http.Client client = _client;
     try {
       final http.Request request = http.Request('POST', uri)
         ..headers.addAll(headers)
@@ -104,6 +120,8 @@ class DsTransport {
 
       await for (final String line
           in response.stream
+              // 相邻数据块之间超过 60 秒视为流卡死，避免永久挂起。
+              .timeout(const Duration(seconds: 60))
               .transform(utf8.decoder)
               .transform(const LineSplitter())) {
         final String trimmed = line.trim();
@@ -140,8 +158,6 @@ class DsTransport {
       throw DsApiException('网络请求失败：${error.message}');
     } catch (error) {
       throw DsApiException('请求失败：$error');
-    } finally {
-      client.close();
     }
   }
 
@@ -184,6 +200,53 @@ class DsTransport {
     } catch (_) {
       return null;
     }
+  }
+
+  /// 非流式请求的有限重试：429/5xx 按指数退避，最多 3 次。
+  static Future<http.Response> _postWithRetry(
+    http.Client client,
+    Uri uri,
+    Map<String, String> headers,
+    Map<String, dynamic> payload,
+    Duration timeout,
+  ) async {
+    Duration wait = const Duration(seconds: 1);
+    for (int attempt = 1; ; attempt++) {
+      final http.Response response = await client
+          .post(uri, headers: headers, body: jsonEncode(payload))
+          .timeout(timeout);
+      if (!_shouldRetry(response.statusCode) || attempt >= _maxAttempts) {
+        return response;
+      }
+      final String? retryAfter = response.headers['retry-after'];
+      final int? seconds = retryAfter == null
+          ? null
+          : int.tryParse(retryAfter.trim());
+      await Future<void>.delayed(
+        seconds == null
+            ? wait
+            : Duration(seconds: seconds.clamp(1, 10)),
+      );
+      wait *= 2;
+    }
+  }
+
+  static bool _shouldRetry(int statusCode) =>
+      statusCode == 429 ||
+      statusCode == 500 ||
+      statusCode == 502 ||
+      statusCode == 503 ||
+      statusCode == 504;
+
+  /// 取出 choices[0].finish_reason（`length` 表示输出被截断）。
+  static String _extractFinishReason(dynamic json) {
+    if (json is! Map) return '';
+    final dynamic choices = json['choices'];
+    if (choices is! List || choices.isEmpty) return '';
+    final dynamic first = choices.first;
+    if (first is! Map) return '';
+    final dynamic value = first['finish_reason'];
+    return value is String ? value : '';
   }
 
   /// 取出 choices[0].message 下的某个字符串字段。

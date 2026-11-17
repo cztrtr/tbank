@@ -8,6 +8,15 @@ class QuestionQualityReport {
   int invalid = 0;
   final List<String> notes = <String>[];
 
+  /// 生成过程中不致命、但值得提示用户的问题（例如某个题型重试后仍不足）。
+  final List<String> warnings = <String>[];
+
+  void addWarning(String message) {
+    if (warnings.length < 6 && !warnings.contains(message)) {
+      warnings.add(message);
+    }
+  }
+
   int get removed => duplicates + invalid;
   bool get hasIssues => removed > 0;
 
@@ -17,14 +26,20 @@ class QuestionQualityReport {
   }
 
   String get summary {
-    if (!hasIssues) return '质量检查通过';
-    final StringBuffer buffer = StringBuffer('质量检查：');
-    if (duplicates > 0) buffer.write('去重 $duplicates 道');
-    if (invalid > 0) {
-      if (duplicates > 0) buffer.write('，');
-      buffer.write('过滤 $invalid 道');
+    final StringBuffer buffer = StringBuffer();
+    if (hasIssues) {
+      buffer.write('质量检查：');
+      if (duplicates > 0) buffer.write('去重 $duplicates 道');
+      if (invalid > 0) {
+        if (duplicates > 0) buffer.write('，');
+        buffer.write('过滤 $invalid 道');
+      }
     }
-    return buffer.toString();
+    if (warnings.isNotEmpty) {
+      if (buffer.isNotEmpty) buffer.write('；');
+      buffer.write(warnings.first);
+    }
+    return buffer.isEmpty ? '质量检查通过' : buffer.toString();
   }
 }
 
@@ -168,15 +183,18 @@ class QuestionQuality {
     return '$type|${_normalize(question['question']?.toString() ?? '')}';
   }
 
+  /// 去重/查重用的标点正则；生成时每道题都会调用，提成 static final。
+  static final RegExp _noisePattern = RegExp(
+    r'[\s，。；：！？、,.!?;:()（）\[\]【】“”‘’\-—_/\\]+',
+  );
+  static final RegExp _spacePattern = RegExp(r'\s+');
+
   static String _normalize(String value) {
-    return value.toLowerCase().replaceAll(
-      RegExp(r'[\s，。；：！？、,.!?;:()（）\[\]【】“”‘’\-—_/\\]+'),
-      '',
-    );
+    return value.toLowerCase().replaceAll(_noisePattern, '');
   }
 
   static String _compact(dynamic value) {
-    return (value?.toString() ?? '').replaceAll(RegExp(r'\s+'), ' ').trim();
+    return (value?.toString() ?? '').replaceAll(_spacePattern, ' ').trim();
   }
 
   static String _short(dynamic value) {
