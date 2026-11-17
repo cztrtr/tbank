@@ -847,20 +847,20 @@ class MistakeBooks {
       }
     }
 
-    // 2. 删除清空后的分组子目录（根目录本身保留）
+    // 2. 删除根目录下所有剩余内容（含嵌套分组子目录、未知文件），根目录本身保留。
+    //    分组名可能带 `/`，所以不能只删根目录下一层；必须递归删除。
     try {
       for (final FileSystemEntity entity in dir.listSync()) {
-        if (entity is! Directory) continue;
         try {
-          await entity.delete();
+          await entity.delete(recursive: true);
         } catch (error) {
           ok = false;
-          debugPrint('删除错题本分组目录失败：${entity.path} $error');
+          debugPrint('删除错题本残留内容失败：${entity.path} $error');
         }
       }
     } catch (error) {
       ok = false;
-      debugPrint('清理错题本分组目录失败：$error');
+      debugPrint('清理错题本目录失败：$error');
     }
 
     // 3. 清空「已删除来源」清单：之前删过的题之后也能重新被收集
