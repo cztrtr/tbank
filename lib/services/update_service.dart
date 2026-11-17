@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
@@ -103,6 +105,11 @@ class UpdateService {
       }
 
       final IOSink sink = file.openWrite();
+      // 边下边算 SHA-256，避免下载完再读一遍大文件。
+      final _DigestSink digestSink = _DigestSink();
+      final ByteConversionSink digestInput = sha256.startChunkedConversion(
+        digestSink,
+      );
       int received = 0;
       // 进度回调节流：UI 侧每个回调都会 setState，100 MB 的文件按
       // chunk 回调会有几千次；这里每 200 ms 才通知一次，
@@ -117,11 +124,13 @@ class UpdateService {
             throw const UpdateException('更新包太大（超过 300 MB），已中止下载');
           }
           sink.add(chunk);
+          digestInput.add(chunk);
           if (onProgress != null && throttle.elapsedMilliseconds >= 200) {
             throttle.reset();
             onProgress(received, total);
           }
         }
+        digestInput.close();
         onProgress?.call(received, total);
       } finally {
         await sink.close();
@@ -134,6 +143,14 @@ class UpdateService {
       if (total != null && received != total) {
         await file.delete();
         throw const UpdateException('下载不完整，请重试');
+      }
+
+      // 如果服务器提供 <apk>.sha256，就强制校验；没有提供时跳过（兼容旧发布）。
+      final String? expected = await _fetchExpectedSha256(client, uri);
+      final Digest actual = digestSink.value ?? sha256.convert(const <int>[]);
+      if (expected != null && expected.toLowerCase() != actual.toString()) {
+        await file.delete();
+        throw const UpdateException('更新包校验失败（SHA-256 不匹配），已删除下载文件');
       }
       return file;
     } on UpdateException {
@@ -164,6 +181,33 @@ class UpdateService {
     return result ?? 'error';
   }
 
+  /// 读取 `<apk>.sha256` 旁车文件；不存在时返回 null。
+  ///
+  /// 只接受 64 位十六进制；响应体里附带文件名也兼容（取第一个 token）。
+  static Future<String?> _fetchExpectedSha256(
+    http.Client client,
+    Uri apkUri,
+  ) async {
+    final Uri sidecar = apkUri.replace(path: '${apkUri.path}.sha256');
+    try {
+      final http.Response response = await client
+          .get(sidecar)
+          .timeout(const Duration(seconds: 15));
+      if (response.statusCode == 404) return null;
+      if (response.statusCode != 200) {
+        debugPrint('读取更新包校验文件失败：HTTP ${response.statusCode}');
+        return null;
+      }
+      final String text = response.body.trim();
+      final RegExpMatch? match = RegExp(r'[a-fA-F0-9]{64}').firstMatch(text);
+      return match?.group(0)?.toLowerCase();
+    } catch (error) {
+      // 旁车文件是可选增强：网络异常不阻塞更新，只记录。
+      debugPrint('读取更新包校验文件失败：${error.runtimeType}');
+      return null;
+    }
+  }
+
   /// 下载目录：Android 用缓存目录（FileProvider 已配置），桌面用下载目录。
   static Future<Directory> _downloadDirectory() async {
     final Directory base;
@@ -181,4 +225,17 @@ class UpdateService {
     }
     return dir;
   }
+}
+
+/// 收集 `sha256.startChunkedConversion` 的最终摘要。
+class _DigestSink implements Sink<Digest> {
+  Digest? value;
+
+  @override
+  void add(Digest data) {
+    value = data;
+  }
+
+  @override
+  void close() {}
 }

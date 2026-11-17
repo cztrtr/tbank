@@ -88,7 +88,8 @@
   - 归纳知识点时最多均匀采样 60 道原题，避免提示词过长
 - 应用更新
   - 入口在「设置」页：填 cpolar 地址 → 下载 `app-release.apk` → 拉起系统安装器
-  - 地址支持完整 APK 链接、只填域名（自动补 `/app-release.apk`）、不带协议（自动补 https）
+  - 地址支持完整 APK 链接、只填域名（自动补 `/app-release.apk`）、不带协议（自动补 https）；
+  - 只允许 https；如果服务器提供 `<apk>.sha256` 旁车文件，会强制校验下载内容
   - Android 下载到缓存目录后，通过 FileProvider 交给系统安装器；桌面端只下载到下载目录
   - 未授予「安装未知应用」时会跳到系统授权页并提示用户重试
 - 统计与持久化
@@ -141,7 +142,7 @@ lib/
 │   ├── ref_hash.dart               # 题库来源的稳定哈希（工作副本 / 进度文件命名）
 │   ├── saf.dart                    # Android SAF 通道封装
 │   ├── ds_api_service.dart         # DeepSeek 业务层（提示词/判分/解析/出题）
-│   ├── ds_transport.dart           # DeepSeek HTTP 传输层（流式/非流式/SSE）
+│   ├── ds_transport.dart           # DeepSeek HTTP 传输层（非流式 + 重试 + 错误翻译）
 │   ├── ds_api_exception.dart       # DsApiException
 │   ├── ai_question_generator.dart  # AI 出题：生成、校验、落盘到 Question/
 │   ├── variant_question_generator.dart # AI 变式出题：读题库→归纳知识点→按希腊字母命名写回同目录
@@ -157,9 +158,9 @@ lib/
 │   ├── practice_controller.dart    # 练习状态机（题号/选择/判分/计数/断点）
 │   ├── practice_persistence.dart   # 保存/防抖/回拷/断点
 │   ├── practice_ai_service.dart    # AI 判分、AI 解析、题目配图读取
-│   ├── answer_image_picker.dart    # 作答图片选择与压缩（4 张 / 5 MB / 10 MB）
-│   ├── practice_question_view.dart # 原生单题 UI（测试/关闭插件运行时）
-│   ├── practice_page.dart          # 练习页：加载、状态编排、完成页
+│   ├── practice_host.dart          # 练习页与题型渲染器（WebView/fake host）的契约
+│   ├── practice_page.dart          # 练习页：加载、状态编排
+│   ├── practice_finished_view.dart # 练习完成页
 │   ├── plugin_practice_view.dart   # 插件练习 WebView 宿主
 │   ├── plugin_config_page.dart     # 插件 config.html 配置页宿主
 │   ├── plugin_type_selector.dart   # 出题页的插件 + 题型选择器
@@ -174,7 +175,6 @@ lib/
 │   └── settings_page.dart          # 设置页
 ├── widgets/
 │   ├── quote_card.dart             # 首页语录卡
-│   ├── question_image.dart         # 题目配图
 │   └── math_text.dart              # LaTeX 公式混合文本
 assets/plugins/standard/            # 内置 standard：manifest/HTML/JS/CSS/KaTeX/普惠体
 docs/PLUGIN_DEVELOPMENT.md          # 第三方插件完整开发文档
@@ -461,10 +461,13 @@ flush + `syncBack()`，以及断点 `saveProgress` / `clearProgress`。
 练习页的 AI 动作：读题目配图、主观题 `score`、`explain` 解析。
 页面只保留 loading/错误状态和 UI。
 
-### AnswerImagePicker（`lib/screen/answer_image_picker.dart`）
+### PracticeHost（`lib/screen/practice_host.dart`）
 
-作答图片选择与压缩：最多 4 张、单张 5 MB、合计 10 MB，长边压到 1600。
-校验失败抛 `AnswerImageException`，页面只负责提示。
+练习页与题型渲染器之间的契约：
+
+- `PracticeHostData` 携带题目、选项、已答状态、AI 回调和提交/翻页回调；
+- `defaultPracticeHostBuilder` 返回 `PluginPracticeView`（WebView 插件）；
+- widget 测试可注入 fake host，不再依赖原生 `PracticeQuestionView`。
 
 ### QuestionCodec（`lib/models/question_bank.dart`）
 
@@ -508,19 +511,18 @@ Android Storage Access Framework 的 Dart 封装，对应原生 `tbank/saf` 通�
 
 DeepSeek 对话接口（OpenAI 兼容协议）的封装，模型固定为 `deepseek-flash`。
 API Key 从 `AppConfig.dsApiKey` 读取，未配置时抛 `DsApiException`。
-HTTP 传输（非流式 / 流式 / SSE 解析 / 错误翻译）拆在 `ds_transport.dart`，
+HTTP 传输（非流式请求 / 429 与 5xx 重试 / 错误翻译）拆在 `ds_transport.dart`，
 异常类型拆在 `ds_api_exception.dart`；`DsApiService` 只保留提示词与业务解析。
 
 | 成员 | 说明 |
 | --- | --- |
-| `ask(content, stream:, thinking:)` | 通用问答；`thinking` 控制是否启用思考模式 |
 | `scoreAnswer(question:, standardAnswer:, userAnswer:, imageBytes:, answerImages:)` | App 内置评分 Prompt 与 0-10 分解析，供填空/解释题判分；`imageBytes` 是题目配图，`answerImages` 是学生上传的作答图片（可多张） |
 | `complete(prompt:, images:)` | 独立 AI 补全：Prompt 由插件提供，App 只负责鉴权/发送/返回文本；固定模型、非流式、Prompt ≤20 KB、最多 6 图 |
 | `explainQuestion(question:, options:, correctAnswer:, imageBytes:)` | 旧解析入口：App 内置 Prompt，保留给原生回退和旧插件 |
+| `extractImageNotes(images:, requirements:)` | 拍书出题：先把图片识别成文字/考点摘要，再交给纯文本批量生成 |
 | `extractKnowledgePoints(bankName:, questionsText:)` | 通读题库摘要，归纳知识点，返回 `List<String>` |
 | `generateQuestionsFromKnowledge(topic:, knowledgePoints:, types:, count:)` | 围绕知识点生成变式题，返回原始 JSON 文本 |
 | `parseKnowledgePoints(raw)` | 解析知识点 JSON，容忍代码围栏与多余文字 |
-| `sseDelta(line)` | 转发到 `DsTransport.sseDelta`，解析一行 SSE，区分正文 `content` 与思考过程 `reasoning_content` |
 
 说明：
 
@@ -591,7 +593,6 @@ HTTP 传输（非流式 / 流式 / SSE 解析 / 错误翻译）拆在 `ds_transp
 | 组件 | 说明 |
 | --- | --- |
 | `QuoteCard` | 首页语录卡，从 `assets/texts/quotes.txt` 随机取句 |
-| `QuestionImage` | 题目配图，从题库目录读字节渲染，缺失/损坏显示占位框 |
 | `MathText` | 支持 LaTeX 的文本：解析 `$...$` / `\(...\)`（行内）与 `$$...$$` / `\[...\]`（独立公式），用 flutter_math_fork 渲染；无公式时退化为普通 `Text` / `SelectableText` |
 
 ## 页面切换与状态
@@ -635,8 +636,9 @@ ValueListenableBuilder<List<String>>(
 4. 私有字段放 `pluginData`，需要修改时调 `tbankUpdatePluginData`；
 5. 打包 zip，在「设置 → 插件管理」安装。
 
-只有要新增 **App 内置原生题型** 时，才需要改 `QuestionType`、`QuestionCodec` 和原生
-`PracticeQuestionView`；详细插件协议见 [插件开发指南](PLUGIN_DEVELOPMENT.md)。
+新增题型优先走插件；只有要改 App 内置数据模型时才需要动 `QuestionType` /
+`QuestionCodec`。练习页通过 `PracticeHost` 渲染，不再维护第二套原生题型 UI。
+详细插件协议见 [插件开发指南](PLUGIN_DEVELOPMENT.md)。
 
 ### 4. 修改判分 / 统计
 
@@ -810,7 +812,7 @@ kotlin.incremental=false
 - **`Question/` 里的题库在管理页删不掉**：它是 App 内置目录，没有 `config.json` 记录可移除；要彻底删除请到「拍书出题」页底部的「已生成的题库」列表操作（删除不可恢复，错题本里已收集的题目会保留）；
 - **界面状态**：练习状态收在 `PracticeController`，其余页面状态仍由各页 State 持有；没有引入 Provider/Riverpod，跨页面共享只通过 AppConfig 的 notifier（题库列表另有 `BankRepository` 缓存）；
 - **配图不会被复制**：`load()` 只复制 JSON 到文档目录，图片始终从题库所在目录读取。因此源目录被删除、改名或权限被收回后，图片会退化成「图片不存在」占位框（不影响答题）；
-- **配图高度上限 320px**：超过这个高度的图会被等比缩放到 320 以内，长截图可能看不清；改 `QuestionImage.maxHeight` 即可；
+- **配图由插件渲染**：App 只把题目配图作为 data URL 注入插件 context；显示尺寸/缩放由插件 CSS 控制。
 - **assets 体积**：`assets/images/home_bg/` 的背景图已压缩为 WebP（约 2.8 MB），以后新增图片建议同样压缩后再放入。
 
 ## 插件系统
@@ -874,8 +876,8 @@ kotlin.incremental=false
 
 ### WebView 运行时
 
-`PluginRuntime.enabled` 为 true 时，所有已安装插件的题库改用
-`PluginPracticeView` 加载 `plugins/<id>/index.html`：
+练习页通过 `PracticeHost` 统一渲染，默认实现是
+`PluginPracticeView`，加载 `plugins/<id>/index.html`：
 
 - Android：`webview_flutter`（官方 WebView）；
 - Windows：`webview_windows`（WebView2，构建机需要把 `nuget.exe` 放进 PATH）；
@@ -909,8 +911,8 @@ App 通过统一桥接提供：
 - 切到其它 tab 时宿主调用 `window.__tbankPause()`，返回时调用 `__tbankResume()`（插件可选实现）；Windows 同时 `suspend/resume` WebView。
 
 插件只负责渲染和判分逻辑；App 保留题库加载、统计、持久化、回拷和导航。
-widget 测试默认关闭 `PluginRuntime.enabled`，走原生 `PracticeQuestionView`，
-避免依赖 WebView 平台实现。
+widget 测试通过 `PracticePage(hostBuilder: ...)` 注入 fake host，不依赖
+WebView 平台实现；生产代码只有 WebView 一条渲染路径。
 
 ### 插件配置
 

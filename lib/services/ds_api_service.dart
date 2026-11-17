@@ -7,26 +7,10 @@ import 'ds_api_exception.dart';
 import 'ds_transport.dart';
 
 export 'ds_api_exception.dart';
-export 'ds_transport.dart' show DsStreamDelta;
 
 /// DeepSeek 对话 API 的封装（OpenAI 兼容协议），固定使用 `deepseek-flash`。
 ///
-/// 用法：
-/// ```dart
-/// // 非流式，关闭推理
-/// final a = await DsApiService.ask('什么是间皮？', stream: false, thinking: false);
-///
-/// // 流式，启用推理
-/// final b = await DsApiService.ask(
-///   '为什么这题选 B？',
-///   stream: true,
-///   thinking: true,
-///   onDelta: (chunk) => setState(() => _answer += chunk),
-///   onReasoning: (chunk) => setState(() => _thinking += chunk),
-/// );
-/// ```
-///
-/// 失败时抛出 [DsApiException]。
+/// 所有请求均为非流式；失败时抛出 [DsApiException]。
 class DsApiService {
   DsApiService._();
 
@@ -42,45 +26,13 @@ class DsApiService {
   /// 给足 5 分钟，避免长输出被中途掐断。
   static const Duration _generationTimeout = Duration(seconds: 300);
 
-  /// 发起一次对话，返回完整回答文本。
-  ///
-  /// - [content]：要询问的内容；
-  /// - [stream]：是否流式输出。为 true 时每收到一段就调用 [onDelta]，
-  ///   同时把全文累积起来作为返回值；
-  /// - [thinking]：是否启用推理（思考模式）。启用后模型会先输出思考过程，
-  ///   通过 [onReasoning] 回调给出（非流式时为一次性整段）。
-  ///
-  /// API Key 取自 `AppConfig.dsApiKey`，未配置时直接抛异常。
-  static Future<String> ask(
-    String content, {
-    required bool stream,
-    required bool thinking,
-    void Function(String delta)? onDelta,
-    void Function(String delta)? onReasoning,
-  }) async {
-    final String question = content.trim();
-    if (question.isEmpty) {
-      throw DsApiException('问题内容不能为空');
-    }
-    return _send(
-      question,
-      stream: stream,
-      thinking: thinking,
-      onDelta: onDelta,
-      onReasoning: onReasoning,
-    );
-  }
-
   /// 真正发请求的地方。
   ///
   /// [content] 可以是纯字符串，也可以是 OpenAI 兼容的内容块数组
   /// （带图片时使用，见 [scoreAnswer]）。
   static Future<String> _send(
     Object content, {
-    required bool stream,
     required bool thinking,
-    void Function(String delta)? onDelta,
-    void Function(String delta)? onReasoning,
     Duration timeout = _defaultTimeout,
     int maxTokens = 4096,
   }) async {
@@ -94,7 +46,7 @@ class DsApiService {
       'messages': <Map<String, dynamic>>[
         <String, dynamic>{'role': 'user', 'content': content},
       ],
-      'stream': stream,
+      'stream': false,
       // 显式限制输出长度：不设置时服务端默认值可能把长 JSON 截断，
       // 表现为「AI 返回的不是合法 JSON」。
       'max_tokens': maxTokens,
@@ -105,19 +57,10 @@ class DsApiService {
     final Map<String, String> headers = <String, String>{
       'Authorization': 'Bearer $apiKey',
       'Content-Type': 'application/json',
-      'Accept': stream ? 'text/event-stream' : 'application/json',
+      'Accept': 'application/json',
     };
 
-    return stream
-        ? DsTransport.chatStream(
-            uri,
-            headers,
-            payload,
-            onDelta,
-            onReasoning,
-            timeout,
-          )
-        : DsTransport.chatOnce(uri, headers, payload, onReasoning, timeout);
+    return DsTransport.chatOnce(uri, headers, payload, timeout);
   }
 
   // ---------------------------------------------------------------- 判分
@@ -169,7 +112,6 @@ class DsApiService {
         questionImage: imageBytes,
         answerImages: answerImages,
       ),
-      stream: false,
       thinking: false,
     );
     return _parseScore(raw);
@@ -226,7 +168,6 @@ ${studentAnswer.isEmpty ? '' : '\n学生作答：$studentAnswer'}
         questionImage: imageBytes,
         answerImages: answerImages,
       ),
-      stream: false,
       thinking: false,
     );
     final String trimmed = text.trim();
@@ -254,7 +195,6 @@ ${studentAnswer.isEmpty ? '' : '\n学生作答：$studentAnswer'}
 
     final String text = await _send(
       _withImages(trimmed, answerImages: images, answerImagesLabel: '附图'),
-      stream: false,
       thinking: false,
     );
     final String result = text.trim();
@@ -307,7 +247,6 @@ $rules
 
     return _send(
       prompt,
-      stream: false,
       thinking: false,
       timeout: _generationTimeout,
       maxTokens: 8192,
@@ -339,7 +278,7 @@ $rules
 $questionsText
 ''';
 
-    final String raw = await _send(prompt, stream: false, thinking: false);
+    final String raw = await _send(prompt, thinking: false);
     return parseKnowledgePoints(raw);
   }
 
@@ -384,7 +323,6 @@ $rules
 
     return _send(
       prompt,
-      stream: false,
       thinking: false,
       timeout: _generationTimeout,
       maxTokens: 8192,
@@ -444,7 +382,6 @@ $rules
 
     return _send(
       _withImages(prompt, answerImages: valid, answerImagesLabel: '用户拍摄的图片'),
-      stream: false,
       thinking: false,
       timeout: _generationTimeout,
       maxTokens: 8192,
@@ -486,7 +423,6 @@ $rules
 
     final String raw = await _send(
       _withImages(prompt, answerImages: valid, answerImagesLabel: '用户拍摄的图片'),
-      stream: false,
       thinking: false,
       timeout: _defaultTimeout,
       maxTokens: 2048,
@@ -685,9 +621,4 @@ $rules
     final int score = int.parse(match.group(0)!);
     return score.clamp(0, 10).toInt();
   }
-
-  /// 从一行 SSE 中取出增量内容（正文与思考过程）。
-  ///
-  /// 实现在 [DsTransport]，这里保留入口方便旧调用方。
-  static DsStreamDelta? sseDelta(String line) => DsTransport.sseDelta(line);
 }
