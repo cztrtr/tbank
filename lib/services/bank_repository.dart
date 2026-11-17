@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
@@ -25,23 +27,71 @@ class BankScanResult {
 /// - 默认 2 秒内复用上次结果（页面之间切换不用重复列目录）；
 /// - 传 `refresh: true` 强制重新扫描（目录变化、用户主动刷新时用）；
 /// - 并发调用共享同一次扫描，不会重复 IO。
+/// 一份题库的统计摘要。
+///
+/// 由 [BankRepository.loadAnalysis] 在后台 isolate 解析 JSON 后生成，
+/// 管理页/统计页复用，避免同一份文件被反复全文解析。
+class BankStat {
+  const BankStat({
+    required this.questionCount,
+    required this.practiceCount,
+    required this.attemptCount,
+    required this.wrongCount,
+    this.wrongItems = const <({String question, int wrong})>[],
+  });
+
+  final int questionCount;
+
+  /// 整本练习轮数：所有题里最小的作答次数。
+  final int practiceCount;
+
+  final int attemptCount;
+  final int wrongCount;
+
+  /// 答错过、且题干非空的题目（最多 20 条，供统计页取全局前 5）。
+  final List<({String question, int wrong})> wrongItems;
+
+  double? get accuracy =>
+      attemptCount == 0 ? null : 1 - wrongCount / attemptCount;
+}
+
+class _CachedAnalysis {
+  const _CachedAnalysis({
+    required this.stat,
+    required this.modified,
+    required this.size,
+    required this.cachedAt,
+  });
+
+  final BankStat stat;
+  final int modified;
+  final int size;
+  final DateTime cachedAt;
+}
+
 class BankRepository {
   BankRepository._();
 
   static final BankRepository instance = BankRepository._();
 
   static const Duration _cacheTtl = Duration(seconds: 2);
+  static const Duration _safStatsTtl = Duration(seconds: 60);
 
   BankScanResult? _cached;
   DateTime? _cachedAt;
   Future<BankScanResult>? _inflight;
   VoidCallback? _onDirsChanged;
 
+  /// 题库统计缓存：uri → 解析结果 + 文件指纹。
+  final Map<String, _CachedAnalysis> _analysisCache =
+      <String, _CachedAnalysis>{};
+
   /// 丢弃缓存；题库目录增删后由监听器自动调用。
   void invalidate() {
     _cached = null;
     _cachedAt = null;
     _inflight = null;
+    invalidateStats();
   }
 
   /// 列出所有可见题库。
@@ -79,6 +129,121 @@ class BankRepository {
       }),
     );
     return future;
+  }
+
+  /// 读取一组题库的统计摘要。
+  ///
+  /// [refresh] 为 true 时忽略缓存；文件 mtime/size 未变时直接复用。
+  /// 解析在后台 isolate 完成，避免大批题库卡住 UI。
+  Future<Map<String, BankStat>> loadStats(
+    List<QuestionBankFile> files, {
+    bool refresh = false,
+  }) async {
+    final Map<String, BankStat> result = <String, BankStat>{};
+    const int concurrency = 6;
+    for (int start = 0; start < files.length; start += concurrency) {
+      final int end = (start + concurrency).clamp(0, files.length);
+      final List<BankStat?> chunk = await Future.wait(
+        files
+            .sublist(start, end)
+            .map(
+              (QuestionBankFile file) =>
+                  _loadAnalysis(file, refresh: refresh),
+            ),
+      );
+      for (int i = 0; i < chunk.length; i++) {
+        final BankStat? stat = chunk[i];
+        if (stat != null) result[files[start + i].uri] = stat;
+      }
+    }
+    return result;
+  }
+
+  final Map<String, Future<BankStat?>> _analysisInflight =
+      <String, Future<BankStat?>>{};
+
+  Future<BankStat?> _loadAnalysis(
+    QuestionBankFile file, {
+    required bool refresh,
+  }) async {
+    final String uri = file.uri;
+    final bool isSaf = uri.startsWith('content://');
+    int modified = 0;
+    int size = 0;
+    if (!isSaf) {
+      try {
+        final FileStat stat = await File(uri).stat();
+        modified = stat.modified.millisecondsSinceEpoch;
+        size = stat.size;
+      } catch (error) {
+        debugPrint('读取题库文件信息失败：${error.runtimeType}');
+      }
+    }
+
+    final _CachedAnalysis? cached = _analysisCache[uri];
+    if (!refresh && cached != null) {
+      final bool fresh = isSaf
+          ? DateTime.now().difference(cached.cachedAt) < _safStatsTtl
+          : cached.modified == modified && cached.size == size;
+      if (fresh) return cached.stat;
+    }
+
+    final Future<BankStat?>? inflight = _analysisInflight[uri];
+    if (inflight != null) return inflight;
+
+    late final Future<BankStat?> future;
+    future = () async {
+      try {
+        final String raw = await BankIo.readText(uri);
+        final Map<String, dynamic> parsed = await compute(
+          _parseBankAnalysis,
+          raw,
+        );
+        final List<({String question, int wrong})> wrongItems =
+            <({String question, int wrong})>[];
+        final dynamic rawWrong = parsed['wrongItems'];
+        if (rawWrong is List) {
+          for (final dynamic item in rawWrong) {
+            if (item is! Map) continue;
+            wrongItems.add((
+              question: item['question']?.toString() ?? '',
+              wrong: item['wrong'] is num
+                  ? (item['wrong'] as num).toInt()
+                  : 0,
+            ));
+          }
+        }
+        final BankStat stat = BankStat(
+          questionCount: (parsed['questionCount'] as num?)?.toInt() ?? 0,
+          practiceCount: (parsed['practiceCount'] as num?)?.toInt() ?? 0,
+          attemptCount: (parsed['attemptCount'] as num?)?.toInt() ?? 0,
+          wrongCount: (parsed['wrongCount'] as num?)?.toInt() ?? 0,
+          wrongItems: wrongItems,
+        );
+        _analysisCache[uri] = _CachedAnalysis(
+          stat: stat,
+          modified: modified,
+          size: size,
+          cachedAt: DateTime.now(),
+        );
+        return stat;
+      } catch (error) {
+        debugPrint('解析题库统计失败：$uri ${error.runtimeType}');
+        return null;
+      } finally {
+        if (identical(_analysisInflight[uri], future)) {
+          _analysisInflight.remove(uri);
+        }
+      }
+    }();
+    _analysisInflight[uri] = future;
+    return future;
+  }
+
+  /// 扫描结果变化或用户手动刷新时丢弃统计缓存。
+  void invalidateStats() {
+    _analysisCache.clear();
+    _analysisInflight.clear();
   }
 
   Future<BankScanResult> _scan() async {
@@ -152,5 +317,68 @@ class BankRepository {
       AppConfig.questionBankDirsNotifier.removeListener(listener);
       repo._onDirsChanged = null;
     }
+  }
+}
+
+/// 在后台 isolate 里解析一份题库的统计。
+///
+/// 只读取 `stats` / `question` 字段，不构造完整 [QuestionBank]，减少
+/// isolate 之间的数据拷贝。返回值必须是可跨 isolate 发送的普通 Map。
+Map<String, dynamic> _parseBankAnalysis(String raw) {
+  final Map<String, dynamic> empty = <String, dynamic>{
+    'questionCount': 0,
+    'practiceCount': 0,
+    'attemptCount': 0,
+    'wrongCount': 0,
+    'wrongItems': <Map<String, dynamic>>[],
+  };
+  try {
+    final dynamic decoded = jsonDecode(raw);
+    if (decoded is! Map) return empty;
+    final dynamic rawQuestions = decoded['questions'];
+    if (rawQuestions is! List) return empty;
+
+    int questionCount = 0;
+    int attemptCount = 0;
+    int wrongCount = 0;
+    int? minAttempt;
+    final List<Map<String, dynamic>> wrongItems = <Map<String, dynamic>>[];
+
+    for (final dynamic item in rawQuestions) {
+      if (item is! Map) continue;
+      questionCount++;
+      final dynamic stats = item['stats'];
+      final int attempts = stats is Map && stats['attemptCount'] is num
+          ? (stats['attemptCount'] as num).toInt()
+          : 0;
+      final int wrong = stats is Map && stats['wrongCount'] is num
+          ? (stats['wrongCount'] as num).toInt()
+          : 0;
+      attemptCount += attempts;
+      wrongCount += wrong;
+      if (minAttempt == null || attempts < minAttempt) minAttempt = attempts;
+
+      if (wrong > 0) {
+        final String text = item['question']?.toString().trim() ?? '';
+        if (text.isNotEmpty) {
+          wrongItems.add(<String, dynamic>{'question': text, 'wrong': wrong});
+        }
+      }
+    }
+
+    wrongItems.sort(
+      (Map<String, dynamic> a, Map<String, dynamic> b) =>
+          (b['wrong'] as int).compareTo(a['wrong'] as int),
+    );
+    return <String, dynamic>{
+      'questionCount': questionCount,
+      'practiceCount': minAttempt ?? 0,
+      'attemptCount': attemptCount,
+      'wrongCount': wrongCount,
+      // 每本保留前 20 条，统计页跨题库取前 5 足够。
+      'wrongItems': wrongItems.take(20).toList(),
+    };
+  } catch (_) {
+    return empty;
   }
 }

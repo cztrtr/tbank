@@ -1,5 +1,4 @@
 import 'dart:async'; // unawaited
-import 'dart:convert'; // jsonDecode：读取题库统计
 import 'dart:io'; // Directory：定位 AI 出题目录
 
 import 'package:file_picker/file_picker.dart'; // 桌面端的目录选择器
@@ -46,6 +45,7 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
 
   /// 搜索框控制器与当前关键词（按题库名过滤）。
   final TextEditingController _searchController = TextEditingController();
+  Timer? _searchDebounce; // 搜索输入防抖，避免每敲一个字都重建整棵树
   bool _searching = false; // 是否处于搜索状态（标题栏换成输入框）
   String _query = ''; // 当前搜索关键词
 
@@ -56,8 +56,8 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
   /// 管理页当前折叠的分组 key；从 AppConfig 恢复，点击标题时写回。
   Set<String> _collapsedGroups = <String>{};
 
-  /// 每个题库文件的练习统计；按 uri 缓存，扫描后并发读取。
-  Map<String, _BankStat> _bankStats = <String, _BankStat>{};
+  /// 每个题库文件的练习统计；由 BankRepository 在后台 isolate 解析并缓存。
+  Map<String, BankStat> _bankStats = <String, BankStat>{};
   bool _statsLoading = false;
 
   /// 按关键词过滤后的题库列表；关键词为空时返回全部。
@@ -100,6 +100,7 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
   void dispose() {
     // 页面销毁时移除监听，避免 notifier 持有失效回调
     AppConfig.questionBankDirsNotifier.removeListener(_onDirsChanged);
+    _searchDebounce?.cancel();
     _searchController.dispose();
     super.dispose();
   }
@@ -137,54 +138,22 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
       _files = result.files;
       _scanError = result.errors.isEmpty ? null : result.errors.join('\n');
       _isScanning = false;
-      _bankStats = <String, _BankStat>{};
+      _bankStats = <String, BankStat>{};
       _statsLoading = true;
     });
     unawaited(_loadBankStats(result.files, generation));
   }
 
   /// 汇总每个题库文件里的 stats，供列表显示练习次数 / 正确率。
+  ///
+  /// 解析/缓存都在 BankRepository 里完成；同一份文件在统计页、管理页之间
+  /// 切换时不会重复全文解析。
   Future<void> _loadBankStats(
     List<QuestionBankFile> files,
     int generation,
   ) async {
-    final Map<String, _BankStat> loaded = <String, _BankStat>{};
-    await Future.wait(
-      files.map((QuestionBankFile file) async {
-        try {
-          final dynamic decoded = jsonDecode(await BankIo.readText(file.uri));
-          if (decoded is! Map || decoded['questions'] is! List) return;
-          int questionCount = 0;
-          int attemptCount = 0;
-          int wrongCount = 0;
-          int? minAttemptCount;
-          for (final dynamic item in decoded['questions'] as List) {
-            if (item is! Map) continue;
-            questionCount += 1;
-            final dynamic stats = item['stats'];
-            final int attempts = stats is Map && stats['attemptCount'] is num
-                ? (stats['attemptCount'] as num).toInt()
-                : 0;
-            attemptCount += attempts;
-            if (minAttemptCount == null || attempts < minAttemptCount) {
-              minAttemptCount = attempts;
-            }
-            wrongCount += stats is Map && stats['wrongCount'] is num
-                ? (stats['wrongCount'] as num).toInt()
-                : 0;
-          }
-          loaded[file.uri] = _BankStat(
-            questionCount: questionCount,
-            practiceCount: minAttemptCount ?? 0,
-            attemptCount: attemptCount,
-            wrongCount: wrongCount,
-          );
-        } catch (error) {
-          debugPrint('读取题库统计失败：${file.uri} $error');
-        }
-      }),
-    );
-
+    final Map<String, BankStat> loaded = await BankRepository.instance
+        .loadStats(files);
     if (!mounted || generation != _scanGeneration) return;
     setState(() {
       _bankStats = loaded;
@@ -348,7 +317,12 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
                   hintText: '搜索题库名称',
                   border: InputBorder.none,
                 ),
-                onChanged: (String value) => setState(() => _query = value),
+                onChanged: (String value) {
+                  _searchDebounce?.cancel();
+                  _searchDebounce = Timer(const Duration(milliseconds: 250), () {
+                    if (mounted) setState(() => _query = value);
+                  });
+                },
               )
             : const Text('管理'), // 左上角标题
         actions: <Widget>[
@@ -358,6 +332,7 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
               setState(() {
                 _searching = !_searching;
                 if (!_searching) {
+                  _searchDebounce?.cancel();
                   _searchController.clear();
                   _query = '';
                 }
@@ -497,7 +472,7 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
 
   /// 题库按钮下方的一行统计。
   String _bankStatText(QuestionBankFile file) {
-    final _BankStat? stat = _bankStats[file.uri];
+    final BankStat? stat = _bankStats[file.uri];
     if (stat == null) {
       return _statsLoading ? '练习统计加载中…' : '练习 0 次 / 正确率 —';
     }
@@ -788,24 +763,4 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
   }
 }
 
-/// 单个题库文件的汇总统计。
-class _BankStat {
-  const _BankStat({
-    required this.questionCount,
-    required this.practiceCount,
-    required this.attemptCount,
-    required this.wrongCount,
-  });
 
-  final int questionCount;
-
-  /// 整本练习轮数：取所有题里最小的作答次数。
-  /// 例如 3 道题分别答了 5/3/4 次，说明整本至少完整练过 3 轮。
-  final int practiceCount;
-
-  final int attemptCount;
-  final int wrongCount;
-
-  double? get accuracy =>
-      attemptCount == 0 ? null : 1 - wrongCount / attemptCount;
-}

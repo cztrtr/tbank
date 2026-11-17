@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 
 import '../models/question_bank_file.dart';
@@ -67,6 +65,10 @@ class _StatsPageState extends State<StatsPage> {
     );
     final List<QuestionBankFile> files = scan.files;
 
+    // 解析在 BankRepository 的 isolate 里完成，并与管理页共享缓存。
+    final Map<String, BankStat> stats = await BankRepository.instance
+        .loadStats(files);
+
     final Map<String, _GroupStat> groups = <String, _GroupStat>{};
     final List<({String question, int wrong})> wrongItems =
         <({String question, int wrong})>[];
@@ -76,46 +78,23 @@ class _StatsPageState extends State<StatsPage> {
     int totalWrong = 0;
 
     for (final QuestionBankFile file in files) {
-      try {
-        final dynamic decoded = jsonDecode(await BankIo.readText(file.uri));
-        if (decoded is! Map || decoded['questions'] is! List) continue;
+      final BankStat? stat = stats[file.uri];
+      if (stat == null) continue;
 
-        final String groupName =
-            file.directoryName ?? BankIo.displayNameOf(file.directoryRef);
-        final _GroupStat group = groups.putIfAbsent(
-          groupName,
-          () => _GroupStat(name: groupName),
-        );
+      final String groupName =
+          file.directoryName ?? BankIo.displayNameOf(file.directoryRef);
+      final _GroupStat group = groups.putIfAbsent(
+        groupName,
+        () => _GroupStat(name: groupName),
+      );
 
-        for (final dynamic item in decoded['questions'] as List) {
-          if (item is! Map) continue;
-
-          final dynamic stats = item['stats'];
-          final int attempt = stats is Map && stats['attemptCount'] is num
-              ? (stats['attemptCount'] as num).toInt()
-              : 0;
-          final int wrong = stats is Map && stats['wrongCount'] is num
-              ? (stats['wrongCount'] as num).toInt()
-              : 0;
-
-          totalQuestions += 1;
-          totalAttempt += attempt;
-          totalWrong += wrong;
-          group.questionCount += 1;
-          group.attemptCount += attempt;
-          group.wrongCount += wrong;
-
-          if (wrong > 0) {
-            final String text = item['question']?.toString().trim() ?? '';
-            if (text.isNotEmpty) {
-              wrongItems.add((question: text, wrong: wrong));
-            }
-          }
-        }
-      } catch (error) {
-        // 单个文件损坏：跳过，不影响整体统计
-        debugPrint('统计题库失败：${file.uri} $error');
-      }
+      totalQuestions += stat.questionCount;
+      totalAttempt += stat.attemptCount;
+      totalWrong += stat.wrongCount;
+      group.questionCount += stat.questionCount;
+      group.attemptCount += stat.attemptCount;
+      group.wrongCount += stat.wrongCount;
+      wrongItems.addAll(stat.wrongItems);
     }
 
     wrongItems.sort(
