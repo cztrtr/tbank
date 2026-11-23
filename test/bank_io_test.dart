@@ -55,6 +55,31 @@ void main() {
     test('不是 tree 结构的 content URI 返回 null', () {
       expect(BankIo.parentOf('content://media/external/images/1'), isNull);
     });
+
+    test('目录 document URI 也能解析父级', () {
+      final String docUri =
+          'content://com.android.externalstorage.documents/tree/'
+          '${Uri.encodeComponent('primary:tbankQuestion')}/document/'
+          '${Uri.encodeComponent('primary:tbankQuestion/组织学')}';
+      final ({String key, String label})? parent = BankIo.parentOf(docUri);
+      expect(parent, isNotNull);
+      expect(parent!.key, 'saf:primary/tbankQuestion');
+      expect(parent.label, 'tbankQuestion');
+    });
+  });
+
+  group('BankIo.directoryKeyOf', () {
+    test('同一目录的 tree URI 和 document URI 得到同一个 key', () {
+      final String treeUri =
+          'content://com.android.externalstorage.documents/tree/'
+          '${Uri.encodeComponent('primary:tbankQuestion/组织学')}';
+      final String docUri =
+          'content://com.android.externalstorage.documents/tree/'
+          '${Uri.encodeComponent('primary:tbankQuestion')}/document/'
+          '${Uri.encodeComponent('primary:tbankQuestion/组织学')}';
+      expect(BankIo.directoryKeyOf(treeUri), BankIo.directoryKeyOf(docUri));
+      expect(BankIo.directoryKeyOf(treeUri), 'saf:primary/tbankQuestion/组织学');
+    });
   });
 
   group('分组键', () {

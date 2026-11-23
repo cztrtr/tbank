@@ -42,6 +42,10 @@ class _AiBankEditorPageState extends State<AiBankEditorPage> {
   bool _selecting = false;
   final Set<int> _selected = <int>{};
 
+  /// 列表滚动控制器：勘误后题目高度变化时把偏移夹回有效范围，
+  /// 避免停在旧的超界位置导致整页看起来空白。
+  final ScrollController _scrollController = ScrollController();
+
   /// AI 动作进行中的提示文本；null 表示空闲。
   String? _aiBusy;
 
@@ -53,6 +57,28 @@ class _AiBankEditorPageState extends State<AiBankEditorPage> {
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  /// 勘误/编辑后列表高度会变，下一帧把滚动位置夹回最大范围。
+  void _clampScrollAfterBuild() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scrollController.hasClients) return;
+      final ScrollPosition position = _scrollController.position;
+      if (position.pixels > position.maxScrollExtent) {
+        position.jumpTo(position.maxScrollExtent);
+      }
+    });
+  }
+
+  /// 关闭表单/对话框后收起键盘，避免键盘占位让列表视口异常。
+  void _dismissKeyboard() {
+    FocusManager.instance.primaryFocus?.unfocus();
   }
 
   Future<void> _load() async {
@@ -132,6 +158,7 @@ class _AiBankEditorPageState extends State<AiBankEditorPage> {
           builder: (BuildContext sheetContext) =>
               QuestionEditorSheet(initial: origin, index: index),
         );
+    _dismissKeyboard();
     if (!mounted || result == null) return;
 
     final Question next = _buildQuestion(origin, result);
@@ -142,6 +169,7 @@ class _AiBankEditorPageState extends State<AiBankEditorPage> {
         _questions = List<Question>.of(_questions)..[index] = next;
       }
     });
+    _clampScrollAfterBuild();
     await _persist();
     if (mounted) _toast(index == null ? '已新增题目' : '已保存修改');
   }
@@ -256,6 +284,7 @@ class _AiBankEditorPageState extends State<AiBankEditorPage> {
       _selecting = false;
       _selected.clear();
     });
+    _clampScrollAfterBuild();
     await _persist();
     if (mounted) _toast('已删除 ${ordered.length} 道题');
   }
@@ -302,6 +331,7 @@ class _AiBankEditorPageState extends State<AiBankEditorPage> {
           _GuidanceDialog(fix: fix, count: indices.length),
     );
     if (!mounted || guidance == null) return; // 取消
+    _dismissKeyboard();
     await _runAi(indices, fix: fix, guidance: guidance);
   }
 
@@ -361,6 +391,7 @@ class _AiBankEditorPageState extends State<AiBankEditorPage> {
       _selecting = false;
       _selected.clear();
     });
+    _clampScrollAfterBuild();
     if (saved) {
       _toast(failed == 0 ? '已完成 $done 道题' : '完成 $done 道，其中 $failed 道失败');
     }
@@ -474,6 +505,8 @@ class _AiBankEditorPageState extends State<AiBankEditorPage> {
         ),
         Expanded(
           child: ListView.builder(
+            key: PageStorageKey<String>('editor:${widget.file.uri}'),
+            controller: _scrollController,
             padding: const EdgeInsets.fromLTRB(12, 4, 12, 96),
             itemCount: _questions.length,
             itemBuilder: (BuildContext context, int index) =>
@@ -489,6 +522,7 @@ class _AiBankEditorPageState extends State<AiBankEditorPage> {
     final bool isSelected = _selected.contains(index);
 
     return Card(
+      key: ValueKey<String>('${question.id}#$index'),
       elevation: 0,
       margin: const EdgeInsets.only(bottom: 8),
       color: isSelected ? colors.primaryContainer : colors.surfaceContainerLow,

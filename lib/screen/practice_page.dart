@@ -472,7 +472,8 @@ class _PracticePageState extends State<PracticePage>
       selected: _selected,
       mistakeScore: question.mistakeScore,
       correctAnswerText: _answerText(question),
-      sourceDirectoryRef: _storage?.sourceDirectoryRef,
+      sourceDirectoryRef:
+          _storage?.sourceDirectoryRef ?? widget.bank?.directoryRef,
       onSubmit: (bool correct, Set<String> selected) {
         setState(() {
           _selected
@@ -493,7 +494,8 @@ class _PracticePageState extends State<PracticePage>
             correctAnswer: _answerText(question),
             userAnswer: answer,
             answerImages: const <Uint8List>[],
-            sourceDirectoryRef: _storage?.sourceDirectoryRef,
+            sourceDirectoryRef:
+                _storage?.sourceDirectoryRef ?? widget.bank?.directoryRef,
           );
         } on DsApiException catch (error) {
           return 'AI 解析失败：${error.message}';
@@ -509,7 +511,8 @@ class _PracticePageState extends State<PracticePage>
           question,
           answer: answer,
           answerImages: images,
-          sourceDirectoryRef: _storage?.sourceDirectoryRef,
+          sourceDirectoryRef:
+              _storage?.sourceDirectoryRef ?? widget.bank?.directoryRef,
         );
       },
       onRequestAiComplete: (String prompt, List<Uint8List> images) async {

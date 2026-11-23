@@ -607,7 +607,12 @@ class _PluginPracticeViewState extends State<PluginPracticeView> {
     // 先比较不含图片的 context；父页面 rebuild 但题目状态没变时直接跳过，
     // 避免重复读盘、base64 编码和 JS 执行。
     final Map<String, dynamic> context = _context();
-    final String signature = jsonEncode(context);
+    final String signature = jsonEncode(<String, dynamic>{
+      'context': context,
+      // 源目录可能在首帧后才就绪；把目录也算进签名，避免第一次无图推送后
+      // 因为 context 未变而永远跳过补图。
+      'imageDirectory': widget.sourceDirectoryRef,
+    });
     if (signature == _lastPushedSignature) return;
 
     final Map<String, dynamic> fullContext = await _contextWithImage(context);
@@ -647,25 +652,38 @@ class _PluginPracticeViewState extends State<PluginPracticeView> {
   ) async {
     final Question question = widget.question;
     final String? directory = widget.sourceDirectoryRef;
-    if (!question.hasImage || directory == null) return context;
+    if (!question.hasImage) return context;
 
-    final String cacheKey = '${question.id}|${question.image}|$directory';
+    final List<String> directories = <String>{
+      if (directory != null && directory.trim().isNotEmpty) directory,
+      if (widget.bankFile != null &&
+          widget.bankFile!.directoryRef.trim().isNotEmpty)
+        widget.bankFile!.directoryRef,
+    }.toList();
+    if (directories.isEmpty) return context;
+
+    final String cacheKey =
+        '${question.id}|${question.image}|${directories.join('|')}';
     String? data = _cachedImageDataUrl;
     if (_cachedImageKey != cacheKey || data == null) {
-      try {
-        final Uint8List? bytes = await BankIo.readSiblingBytes(
-          directory,
-          question.image,
-        );
-        if (bytes == null || bytes.isEmpty) return context;
-        final String mime = _imageMime(bytes);
-        data = 'data:$mime;base64,${base64Encode(bytes)}';
-        _cachedImageKey = cacheKey;
-        _cachedImageDataUrl = data;
-      } catch (error) {
-        debugPrint('读取插件题目配图失败：$error');
-        return context;
+      data = null;
+      for (final String candidate in directories) {
+        try {
+          final Uint8List? bytes = await BankIo.readSiblingBytes(
+            candidate,
+            question.image,
+          );
+          if (bytes == null || bytes.isEmpty) continue;
+          final String mime = _imageMime(bytes);
+          data = 'data:$mime;base64,${base64Encode(bytes)}';
+          break;
+        } catch (error) {
+          debugPrint('读取插件题目配图失败：$candidate $error');
+        }
       }
+      if (data == null) return context;
+      _cachedImageKey = cacheKey;
+      _cachedImageDataUrl = data;
     }
 
     final Map<String, dynamic> questionMap =

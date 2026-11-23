@@ -254,6 +254,15 @@ class BankRepository {
     final List<String> errors = <String>[];
     final Set<String> seen = <String>{};
 
+    bool addFile(QuestionBankFile file) {
+      // 同一物理目录可能以 tree URI / document URI 两种形式出现；
+      // 用目录身份 + 文件名去重，避免递归扫描把同一道题列两遍。
+      final String identity =
+          '${BankIo.directoryKeyOf(file.directoryRef)}|'
+          '${file.name.toLowerCase()}';
+      return seen.add(identity);
+    }
+
     // 用户添加的目录并发扫描：单个目录失败只记错误，不影响其它目录
     final List<({List<QuestionBankFile> files, String? error})> results =
         await Future.wait(
@@ -278,7 +287,7 @@ class BankRepository {
         in results) {
       if (result.error != null) errors.add(result.error!);
       for (final QuestionBankFile file in result.files) {
-        if (seen.add(file.uri)) files.add(file);
+        if (addFile(file)) files.add(file);
       }
     }
 
@@ -286,7 +295,7 @@ class BankRepository {
     try {
       for (final QuestionBankFile file
           in await AiQuestionGenerator.listBankFiles()) {
-        if (seen.add(file.uri)) files.add(file);
+        if (addFile(file)) files.add(file);
       }
     } catch (error) {
       // AI 题库目录异常不影响用户目录的结果

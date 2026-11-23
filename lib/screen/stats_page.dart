@@ -492,7 +492,7 @@ class _HistorySection extends StatelessWidget {
             ),
             const Spacer(),
             Text(
-              '颜色越深，答题越多',
+              ' ',
               style: TextStyle(
                 fontSize: 11,
                 color: colorScheme.onSurfaceVariant,

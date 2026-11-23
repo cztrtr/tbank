@@ -590,7 +590,7 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
       final String aiKey = _aiGroupKeyOf(file);
       final String parentKey = aiKey.isNotEmpty
           ? aiKey
-          : (parent?.key ?? file.rootDirectoryRef);
+          : (parent?.key ?? BankIo.directoryKeyOf(file.rootDirectoryRef));
       parentLabels.putIfAbsent(
         parentKey,
         () => aiKey.isNotEmpty
@@ -599,9 +599,10 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
       );
       // 没有可用的父级：这一组不画子文件夹标题，直接把文件列在父级下
       if (parent == null && aiKey.isEmpty) virtualParents.add(parentKey);
+      final String directoryKey = BankIo.directoryKeyOf(file.rootDirectoryRef);
       tree
           .putIfAbsent(parentKey, () => <String, List<QuestionBankFile>>{})
-          .putIfAbsent(file.rootDirectoryRef, () => <QuestionBankFile>[])
+          .putIfAbsent(directoryKey, () => <QuestionBankFile>[])
           .add(file);
     }
 

@@ -250,11 +250,60 @@ class BankIo {
   /// 异常 URI）时返回 null，由调用方退化成「该目录自己就是一组」。
   ///
   /// - 路径例：`D:\题库\高数` → key `path:D:/题库`，label `题库`
-  /// - SAF 例：`...tree/primary%3A题库%2F高数` → key `saf:primary:题库`，
+  /// - SAF 例：`...tree/primary%3A题库%2F高数` → key `saf:primary/题库`，
   ///   label `题库`
   static ({String key, String label})? parentOf(String directoryRef) {
     if (_isSafRef(directoryRef)) return _safParentOf(directoryRef);
     return _pathParentOf(directoryRef);
+  }
+
+  /// 目录的稳定身份键：同一物理目录的 tree URI / document URI 会得到同一个键。
+  ///
+  /// 管理页按它合并“根目录”和递归扫描拿到的子目录，避免同一文件夹出现两组。
+  static String directoryKeyOf(String directoryRef) {
+    if (_isSafRef(directoryRef)) {
+      final String? docId = _safDocumentId(directoryRef);
+      return docId == null
+          ? 'saf:${directoryRef.toLowerCase()}'
+          : 'saf:${_safDocKey(docId)}';
+    }
+    final String normalized = p
+        .normalize(p.absolute(directoryRef))
+        .replaceAll('\\', '/');
+    return 'path:$normalized';
+  }
+
+  /// SAF URI 里的目录 document id（去掉 journal 的 tree 包装）。
+  ///
+  /// 支持两种形式：
+  /// - `.../tree/primary%3Afoo` → `primary:foo`
+  /// - `.../tree/primary%3Afoo/document/primary%3Afoo%2Fbar` → `primary:foo/bar`
+  static String? _safDocumentId(String ref) {
+    final String decoded = Uri.decodeComponent(ref);
+    final int treeIndex = decoded.indexOf('/tree/');
+    if (treeIndex < 0) return null;
+    String tail = decoded.substring(treeIndex + '/tree/'.length);
+    final int query = tail.indexOf('?');
+    if (query >= 0) tail = tail.substring(0, query);
+    const String documentMarker = '/document/';
+    final int documentIndex = tail.indexOf(documentMarker);
+    if (documentIndex >= 0) {
+      tail = tail.substring(documentIndex + documentMarker.length);
+    }
+    tail = tail.replaceFirst(RegExp(r'/+$'), '');
+    return tail.isEmpty ? null : tail;
+  }
+
+  /// 把 `primary:foo/bar` 变成稳定的 `primary/foo/bar`。
+  static String _safDocKey(String docId) {
+    final int colon = docId.indexOf(':');
+    if (colon < 0) return docId;
+    final String volume = docId.substring(0, colon);
+    final String path = docId
+        .substring(colon + 1)
+        .replaceFirst(RegExp(r'^/+'), '')
+        .replaceFirst(RegExp(r'/+$'), '');
+    return path.isEmpty ? volume : '$volume/$path';
   }
 
   /// 桌面路径的父目录；`D:\` 这类根目录返回 null。
@@ -275,17 +324,12 @@ class BankIo {
   /// SAF 的 tree id 形如 `primary:tbankQuestion/大学物理`：
   /// 冒号前是存储卷，后面是卷内路径；去掉最后一段就是父目录。
   static ({String key, String label})? _safParentOf(String ref) {
-    final String decoded = Uri.decodeComponent(ref);
-    const String marker = '/tree/';
-    final int treeIndex = decoded.indexOf(marker);
-    if (treeIndex < 0) return null;
+    final String? docId = _safDocumentId(ref);
+    if (docId == null) return null;
 
-    final String tail = decoded
-        .substring(treeIndex + marker.length)
-        .replaceFirst(RegExp(r'/+$'), '');
-    final int colon = tail.indexOf(':');
-    final String volume = colon >= 0 ? tail.substring(0, colon) : '';
-    final String path = colon >= 0 ? tail.substring(colon + 1) : tail;
+    final int colon = docId.indexOf(':');
+    final String volume = colon >= 0 ? docId.substring(0, colon) : '';
+    final String path = colon >= 0 ? docId.substring(colon + 1) : docId;
     final List<String> parts = path
         .split('/')
         .where((String part) => part.isNotEmpty)

@@ -69,6 +69,22 @@ class _MathTextState extends State<MathText> {
 
   @override
   Widget build(BuildContext context) {
+    try {
+      return _buildContent(context);
+    } catch (error) {
+      // 公式解析/构造异常时退回源码文本，避免整条列表项变成空白。
+      debugPrint('MathText 渲染失败，退回原文：$error');
+      return Text(
+        widget.text,
+        style: widget.style,
+        textAlign: widget.textAlign,
+        maxLines: widget.maxLines,
+        overflow: widget.overflow,
+      );
+    }
+  }
+
+  Widget _buildContent(BuildContext context) {
     final TextStyle textStyle =
         widget.style ?? DefaultTextStyle.of(context).style;
     final List<_Segment> segments = _segmentsOf(widget.text);
