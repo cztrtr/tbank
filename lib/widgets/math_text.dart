@@ -54,7 +54,6 @@ class MathText extends StatefulWidget {
 class _MathTextState extends State<MathText> {
   String? _cachedText; // 上次解析时的原文
   List<_Segment>? _cachedSegments; // 对应的切分结果
-  final Map<String, Widget> _mathCache = <String, Widget>{}; // LaTeX 渲染结果缓存
 
   /// 取文本的切分结果；文本没变时直接复用缓存。
   List<_Segment> _segmentsOf(String text) {
@@ -176,21 +175,15 @@ class _MathTextState extends State<MathText> {
   }
 
   /// 渲染一段 LaTeX；解析失败时退化为原始源码文本。
-  ///
-  /// 同一段公式在 setState/滚动重建时复用上一次的 Widget，避免重复解析
-  /// LaTeX；样式变化（主题切换）时通过 hashCode 自动失效。
   Widget _buildMath(String latex, TextStyle textStyle) {
-    final String key = '${latex.hashCode}|${textStyle.hashCode}';
-    final Widget? cached = _mathCache[key];
-    if (cached != null) return cached;
-    final Widget widget = Math.tex(
+    // 不要缓存 Math.tex 返回的 Widget：flutter_math_fork 内部会带 GlobalKey，
+    // 同一段文本里重复公式时复用同一个 Widget 会触发 “Multiple widgets used
+    // the same GlobalKey”，进而让整条题目/列表空白。
+    return Math.tex(
       _cleanLatex(latex),
       textStyle: textStyle,
       onErrorFallback: (Object error) => Text(latex, style: textStyle),
     );
-    if (_mathCache.length > 64) _mathCache.clear();
-    _mathCache[key] = widget;
-    return widget;
   }
 
   /// 渲染前的轻量清洗：去掉首尾空白，修掉多转义一层的双反斜杠。

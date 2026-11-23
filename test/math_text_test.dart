@@ -58,6 +58,12 @@ void main() {
     expect(find.byType(Math), findsOneWidget);
   });
 
+  testWidgets('同一段里重复公式不会复用 GlobalKey', (WidgetTester tester) async {
+    await pumpText(tester, r'$\mathrm{Na^+}$ 和 $\mathrm{Na^+}$ 是同一种离子');
+    expect(find.byType(Math), findsNWidgets(2));
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('限定 maxLines 时块级公式与正文合并成一段', (WidgetTester tester) async {
     await pumpText(
       tester,
