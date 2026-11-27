@@ -9,6 +9,7 @@ import '../services/ai_question_generator.dart'; // AI 出题根目录
 import '../services/app_config.dart'; // 题库目录的全局列表
 import '../services/bank_io.dart'; // 统一的目录/文件访问入口
 import '../services/bank_repository.dart'; // 目录扫描 + AI 题库合并
+import '../services/pdf_export_service.dart'; // 导出题目 PDF
 import '../services/mistake_books.dart'; // 添加目录时提前迁移题目 id
 import '../services/saf.dart'; // Android 的 SAF 目录选择
 import 'ai_bank_editor_page.dart'; // 题目管理器：增删改查 / AI 重出 / 纠错
@@ -214,6 +215,26 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
           .showSnackBar(SnackBar(content: Text('添加题库目录失败：$error')));
     } finally {
       if (mounted) setState(() => _isPicking = false);
+    }
+  }
+
+  /// 导出当前题库为 PDF；保存位置由系统文件保存框决定。
+  Future<void> _exportPdf(QuestionBankFile file) async {
+    try {
+      final String? path = await PdfExportService.export(
+        context: context,
+        fileUri: file.uri,
+        sourceDirectoryRef: file.directoryRef,
+        title: file.displayPath,
+        fileName: '${file.displayName}-题目',
+      );
+      if (!mounted || path == null) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('已导出 PDF：$path')));
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('导出 PDF 失败：$error')));
     }
   }
 
@@ -746,6 +767,16 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
                       ),
                     ),
                     const SizedBox(width: 4),
+                    IconButton(
+                      tooltip: '导出 PDF',
+                      onPressed: () => _exportPdf(file),
+                      visualDensity: VisualDensity.compact,
+                      icon: Icon(
+                        Icons.picture_as_pdf_outlined,
+                        size: 20,
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                    ),
                     IconButton(
                       tooltip: '编辑题目',
                       // 打开题目管理器：增删改查 + AI 重新出题 / 纠正错误

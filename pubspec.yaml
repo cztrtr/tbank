@@ -1,7 +1,7 @@
 name: tbank
 description: "本地题库刷题 App：扫描 JSON 题库、逐题作答、记录并回写每题统计。"
 publish_to: 'none'
-version: 0.6.3+2104
+version: 0.6.4+2105
 
 environment:
   sdk: ^3.13.5
@@ -28,6 +28,7 @@ dependencies:
   path_provider: ^2.1.6
   webview_flutter: ^4.14.1
   webview_windows: ^0.4.0
+  pdf: ^3.13.1
 
 dev_dependencies:
   flutter_test:

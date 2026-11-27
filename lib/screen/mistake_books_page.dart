@@ -6,6 +6,7 @@ import '../services/app_config.dart';
 import '../services/bank_io.dart';
 import '../services/bank_repository.dart';
 import '../services/mistake_books.dart';
+import '../services/pdf_export_service.dart';
 import 'practice_page.dart';
 
 /// 错题本二级页面：列出 Alpha、Beta…… 各本错题本。
@@ -172,6 +173,27 @@ class _MistakeBooksPageState extends State<MistakeBooksPage> {
   /// 删除一本错题本：二次确认后连同配图一起删，再刷新列表。
   ///
   /// 被删的题会记入「已删除来源」清单，不会在刷新时被重新收集回来。
+  /// 导出一本错题本为 PDF；配图从本子所在目录读取。
+  Future<void> _exportPdf(MistakeBookInfo book) async {
+    final String group = book.groupName.trim().isEmpty ? '未分组' : book.groupName;
+    try {
+      final String? path = await PdfExportService.export(
+        context: context,
+        fileUri: book.path,
+        sourceDirectoryRef: BankIo.directoryOfFile(book.path),
+        title: '错题本 · $group · ${book.name}',
+        fileName: '错题本-$group-${book.name}',
+      );
+      if (!mounted || path == null) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('已导出错题 PDF：$path')));
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('导出错题 PDF 失败：$error')));
+    }
+  }
+
   Future<void> _delete(MistakeBookInfo book) async {
     final bool? confirmed = await showDialog<bool>(
       context: context,
@@ -538,6 +560,14 @@ class _MistakeBooksPageState extends State<MistakeBooksPage> {
             ],
           ),
           const SizedBox(width: 4),
+          IconButton(
+            tooltip: '导出错题 PDF',
+            onPressed: () => _exportPdf(book),
+            icon: Icon(
+              Icons.picture_as_pdf_outlined,
+              color: colorScheme.onSurfaceVariant,
+            ),
+          ),
           IconButton(
             tooltip: '删除错题本',
             onPressed: () => _delete(book),
