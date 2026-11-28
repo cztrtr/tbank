@@ -767,37 +767,56 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
                       ),
                     ),
                     const SizedBox(width: 4),
-                    IconButton(
-                      tooltip: '导出 PDF',
-                      onPressed: () => _exportPdf(file),
-                      visualDensity: VisualDensity.compact,
+                    PopupMenuButton<String>(
+                      tooltip: '更多操作',
                       icon: Icon(
-                        Icons.picture_as_pdf_outlined,
+                        Icons.more_vert,
                         size: 20,
                         color: colorScheme.onSurfaceVariant,
                       ),
-                    ),
-                    IconButton(
-                      tooltip: '编辑题目',
-                      // 打开题目管理器：增删改查 + AI 重新出题 / 纠正错误
-                      onPressed: () => _openEditor(file),
-                      visualDensity: VisualDensity.compact,
-                      icon: Icon(
-                        Icons.edit_note,
-                        size: 20,
-                        color: colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: 'AI 变式出题',
-                      // 读取这份题库的知识点，重新出题并保存为 xxx-alpha.json / xxx-beta.json…
-                      onPressed: () => _openVariantPage(file),
-                      visualDensity: VisualDensity.compact,
-                      icon: Icon(
-                        Icons.auto_awesome,
-                        size: 20,
-                        color: colorScheme.primary,
-                      ),
+                      onSelected: (String action) {
+                        switch (action) {
+                          case 'pdf':
+                            unawaited(_exportPdf(file));
+                          case 'edit':
+                            unawaited(_openEditor(file));
+                          case 'variant':
+                            unawaited(_openVariantPage(file));
+                        }
+                      },
+                      itemBuilder: (BuildContext context) =>
+                          <PopupMenuEntry<String>>[
+                            const PopupMenuItem<String>(
+                              value: 'pdf',
+                              child: Row(
+                                children: <Widget>[
+                                  Icon(Icons.picture_as_pdf_outlined, size: 20),
+                                  SizedBox(width: 10),
+                                  Text('导出 PDF'),
+                                ],
+                              ),
+                            ),
+                            const PopupMenuItem<String>(
+                              value: 'edit',
+                              child: Row(
+                                children: <Widget>[
+                                  Icon(Icons.edit_note, size: 20),
+                                  SizedBox(width: 10),
+                                  Text('编辑题目'),
+                                ],
+                              ),
+                            ),
+                            const PopupMenuItem<String>(
+                              value: 'variant',
+                              child: Row(
+                                children: <Widget>[
+                                  Icon(Icons.auto_awesome, size: 20),
+                                  SizedBox(width: 10),
+                                  Text('AI 变式出题'),
+                                ],
+                              ),
+                            ),
+                          ],
                     ),
                   ],
                 ),

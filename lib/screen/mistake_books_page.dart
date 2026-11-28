@@ -560,18 +560,43 @@ class _MistakeBooksPageState extends State<MistakeBooksPage> {
             ],
           ),
           const SizedBox(width: 4),
-          IconButton(
-            tooltip: '导出错题 PDF',
-            onPressed: () => _exportPdf(book),
-            icon: Icon(
-              Icons.picture_as_pdf_outlined,
-              color: colorScheme.onSurfaceVariant,
-            ),
-          ),
-          IconButton(
-            tooltip: '删除错题本',
-            onPressed: () => _delete(book),
-            icon: Icon(Icons.delete_outline, color: colorScheme.error),
+          PopupMenuButton<String>(
+            tooltip: '更多操作',
+            icon: Icon(Icons.more_vert, color: colorScheme.onSurfaceVariant),
+            onSelected: (String action) {
+              switch (action) {
+                case 'pdf':
+                  _exportPdf(book);
+                case 'delete':
+                  _delete(book);
+              }
+            },
+            itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+              const PopupMenuItem<String>(
+                value: 'pdf',
+                child: Row(
+                  children: <Widget>[
+                    Icon(Icons.picture_as_pdf_outlined, size: 20),
+                    SizedBox(width: 10),
+                    Text('导出错题 PDF'),
+                  ],
+                ),
+              ),
+              PopupMenuItem<String>(
+                value: 'delete',
+                child: Row(
+                  children: <Widget>[
+                    Icon(
+                      Icons.delete_outline,
+                      size: 20,
+                      color: colorScheme.error,
+                    ),
+                    const SizedBox(width: 10),
+                    const Text('删除错题本'),
+                  ],
+                ),
+              ),
+            ],
           ),
         ],
       ),
