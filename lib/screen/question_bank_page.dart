@@ -181,12 +181,15 @@ class _QuestionBankPageState extends State<QuestionBankPage> {
         dirRef = picked.uri;
         dirName = picked.name;
       } else {
-        final String? path = await FilePicker.getDirectoryPath(
+        final Uri? picked = await FilePicker.pickDirectory(
           dialogTitle: '选择题库目录',
         );
         if (!mounted) return;
-        if (path == null) return; // 用户取消
+        if (picked == null) return; // 用户取消
 
+        final String path = picked.scheme == 'file'
+            ? picked.toFilePath()
+            : picked.toString();
         dirRef = path;
         dirName = BankIo.displayNameOf(path);
       }

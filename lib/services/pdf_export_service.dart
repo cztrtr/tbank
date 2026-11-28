@@ -83,6 +83,7 @@ class PdfExportService {
       final pw.Document document = pw.Document(theme: await _documentTheme());
       await _addCover(document, title, bank.questions.length);
 
+      final List<Uint8List> cardPngs = <Uint8List>[];
       for (int i = 0; i < bank.questions.length; i++) {
         if (!context.mounted) throw StateError('导出页面已关闭');
         final Question question = bank.questions[i];
@@ -97,31 +98,18 @@ class PdfExportService {
           await precacheImage(MemoryImage(imageBytes), context);
         }
         if (!context.mounted) throw StateError('导出页面已关闭');
-        final Uint8List png = await _captureQuestion(
-          context,
-          question: question,
-          number: i + 1,
-          imageBytes: imageBytes,
+        cardPngs.add(
+          await _captureQuestion(
+            context,
+            question: question,
+            number: i + 1,
+            imageBytes: imageBytes,
+          ),
         );
-        final List<Uint8List> pages = await _sliceForPages(png);
-        for (final Uint8List pageBytes in pages) {
-          document.addPage(
-            pw.Page(
-              pageFormat: PdfPageFormat.a4,
-              margin: const pw.EdgeInsets.all(_margin),
-              build: (pw.Context _) {
-                return pw.Align(
-                  alignment: pw.Alignment.topCenter,
-                  child: pw.Image(
-                    pw.MemoryImage(pageBytes),
-                    width: PdfPageFormat.a4.width - _margin * 2,
-                  ),
-                );
-              },
-            ),
-          );
-        }
       }
+
+      // 短题卡自动拼到同一页，长解析才切页，避免一题一页全是空白。
+      await _addQuestionPages(document, cardPngs);
 
       final Uint8List bytes = await document.save();
       final String safeName = _safeFileName(fileName);
@@ -276,31 +264,108 @@ class PdfExportService {
     }
   }
 
-  /// 把长题卡切成适合 A4 的图片页，避免长解析被缩成看不清的小字。
-  static Future<List<Uint8List>> _sliceForPages(Uint8List png) async {
-    final ui.Codec codec = await ui.instantiateImageCodec(png);
-    final ui.FrameInfo frame = await codec.getNextFrame();
-    final ui.Image source = frame.image;
-    final int width = source.width;
-    final int height = source.height;
+  /// 把题目截图按页高打包：短题尽量同页，长题才裁成连续图片页。
+  static Future<void> _addQuestionPages(
+    pw.Document document,
+    List<Uint8List> cardPngs,
+  ) async {
+    const double gap = 10;
+    const double safety = 4;
     final double contentWidth = PdfPageFormat.a4.width - _margin * 2;
-    final double contentHeight = PdfPageFormat.a4.height - _margin * 2;
-    final double scale = contentWidth / width;
-    final int maxSliceHeight = (contentHeight / scale).floor();
+    final double contentHeight = PdfPageFormat.a4.height - _margin * 2 - safety;
 
-    if (height <= maxSliceHeight) {
-      final ByteData? data = await source.toByteData(
-        format: ui.ImageByteFormat.png,
-      );
-      source.dispose();
-      return data == null
-          ? <Uint8List>[]
-          : <Uint8List>[data.buffer.asUint8List()];
+    final List<List<Uint8List>> pages = <List<Uint8List>>[];
+    List<Uint8List> current = <Uint8List>[];
+    double used = 0;
+
+    void flush() {
+      if (current.isEmpty) return;
+      pages.add(current);
+      current = <Uint8List>[];
+      used = 0;
     }
 
-    final List<Uint8List> slices = <Uint8List>[];
-    for (int top = 0; top < height; top += maxSliceHeight) {
-      final int sliceHeight = (height - top).clamp(1, maxSliceHeight);
+    for (final Uint8List png in cardPngs) {
+      final ui.Codec codec = await ui.instantiateImageCodec(png);
+      final ui.FrameInfo frame = await codec.getNextFrame();
+      final ui.Image image = frame.image;
+      final double cardHeight = contentWidth * image.height / image.width;
+
+      if (cardHeight <= contentHeight) {
+        final double needed = (current.isEmpty ? 0 : gap) + cardHeight;
+        if (used + needed <= contentHeight) {
+          current.add(png);
+          used += needed;
+        } else {
+          flush();
+          current.add(png);
+          used = cardHeight;
+        }
+      } else {
+        // 长题先尽量填满当前页剩余空间；剩余空间太窄就换新页。
+        double firstAvailable = contentHeight - used - gap;
+        if (current.isEmpty || firstAvailable < 120) {
+          flush();
+          firstAvailable = contentHeight;
+        }
+        final List<_PdfSlice> slices = await _sliceImage(
+          image,
+          contentWidth: contentWidth,
+          firstHeight: firstAvailable,
+          pageHeight: contentHeight,
+        );
+        for (int i = 0; i < slices.length; i++) {
+          if (current.isNotEmpty) used += gap;
+          current.add(slices[i].png);
+          used += slices[i].height;
+          if (i < slices.length - 1) flush();
+        }
+      }
+      image.dispose();
+    }
+    flush();
+
+    for (final List<Uint8List> page in pages) {
+      document.addPage(
+        pw.Page(
+          pageFormat: PdfPageFormat.a4,
+          margin: const pw.EdgeInsets.all(_margin),
+          build: (pw.Context _) {
+            return pw.Align(
+              alignment: pw.Alignment.topCenter,
+              child: pw.Column(
+                mainAxisSize: pw.MainAxisSize.min,
+                crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+                children: <pw.Widget>[
+                  for (int i = 0; i < page.length; i++) ...<pw.Widget>[
+                    if (i > 0) pw.SizedBox(height: gap),
+                    pw.Image(pw.MemoryImage(page[i]), width: contentWidth),
+                  ],
+                ],
+              ),
+            );
+          },
+        ),
+      );
+    }
+  }
+
+  /// 把一张超长题卡按页面高度裁成若干段。
+  static Future<List<_PdfSlice>> _sliceImage(
+    ui.Image source, {
+    required double contentWidth,
+    required double firstHeight,
+    required double pageHeight,
+  }) async {
+    final double scale = contentWidth / source.width;
+    final List<_PdfSlice> slices = <_PdfSlice>[];
+    int top = 0;
+    double available = firstHeight;
+    while (top < source.height) {
+      final int rows = (available / scale).floor().clamp(
+        1,
+        source.height - top,
+      );
       final ui.PictureRecorder recorder = ui.PictureRecorder();
       final ui.Canvas canvas = ui.Canvas(recorder);
       canvas.drawImageRect(
@@ -308,23 +373,27 @@ class PdfExportService {
         ui.Rect.fromLTWH(
           0,
           top.toDouble(),
-          width.toDouble(),
-          sliceHeight.toDouble(),
+          source.width.toDouble(),
+          rows.toDouble(),
         ),
-        ui.Rect.fromLTWH(0, 0, width.toDouble(), sliceHeight.toDouble()),
+        ui.Rect.fromLTWH(0, 0, source.width.toDouble(), rows.toDouble()),
         ui.Paint(),
       );
       final ui.Image sliced = await recorder.endRecording().toImage(
-        width,
-        sliceHeight,
+        source.width,
+        rows,
       );
       final ByteData? data = await sliced.toByteData(
         format: ui.ImageByteFormat.png,
       );
       sliced.dispose();
-      if (data != null) slices.add(data.buffer.asUint8List());
+      if (data == null) break;
+      slices.add(
+        _PdfSlice(png: data.buffer.asUint8List(), height: rows * scale),
+      );
+      top += rows;
+      available = pageHeight;
     }
-    source.dispose();
     return slices;
   }
 
@@ -337,8 +406,6 @@ class PdfExportService {
         dialogTitle: '保存 PDF',
         fileName: '$suggestedName.pdf',
         mimeType: 'application/pdf',
-        type: FileType.custom,
-        allowedExtensions: <String>['pdf'],
         bytes: bytes,
       );
       if (saved == null) return null;
@@ -372,6 +439,13 @@ class PdfExportService {
     final String name = raw.trim().isEmpty ? '题目导出' : raw.trim();
     return name.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
   }
+}
+
+class _PdfSlice {
+  const _PdfSlice({required this.png, required this.height});
+
+  final Uint8List png;
+  final double height;
 }
 
 /// 导出 PDF 的题目卡片。

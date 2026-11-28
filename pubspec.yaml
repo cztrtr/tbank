@@ -1,7 +1,7 @@
 name: tbank
 description: "本地题库刷题 App：扫描 JSON 题库、逐题作答、记录并回写每题统计。"
 publish_to: 'none'
-version: 0.6.5+2106
+version: 0.6.6+2107
 
 environment:
   sdk: ^3.13.5
@@ -12,7 +12,7 @@ dependencies:
   # 更新包 / 插件包的 SHA-256 校验
   crypto: ^3.0.7
   # 调起系统目录选择器（仅桌面端使用；Android 走 SAF 原生通道）
-  file_picker: ^13.1.0
+  file_picker: ^13.4.0
   flutter:
     sdk: flutter
   # DeepSeek API Key 的落盘：Android Keystore / Windows DPAPI，不再写进 config.json
