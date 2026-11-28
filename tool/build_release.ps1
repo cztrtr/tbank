@@ -5,6 +5,22 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
+# Flutter/Gradle 会把 WARNING 写到 stderr。Windows PowerShell 在 Stop 模式下
+# 会把原生命令的 stderr 当成终止错误，即使进程实际退出码是 0。这里统一把
+# 原生输出转成普通文本，再按 $LASTEXITCODE 判断真实结果。
+function Invoke-Flutter {
+  param([string[]]$Arguments)
+  $old = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    & flutter @Arguments 2>&1 | ForEach-Object { Write-Host $_ }
+    $code = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $old
+  }
+  if ($code -ne 0) { throw "Flutter 构建失败（$code）：$($Arguments -join ' ')" }
+}
+
 $versionLine = Get-Content 'pubspec.yaml' |
   Where-Object { $_ -match '^version:' } |
   Select-Object -First 1
@@ -20,8 +36,11 @@ $targets = @(
 )
 
 foreach ($target in $targets) {
-  & flutter build apk --release --target-platform $target.Platform "--android-project-arg=tbankTargetAbis=$($target.Abi)"
-  if ($LASTEXITCODE -ne 0) { throw "Android 构建失败：$($target.Platform)" }
+  Invoke-Flutter @(
+    'build', 'apk', '--release',
+    '--target-platform', $target.Platform,
+    "--android-project-arg=tbankTargetAbis=$($target.Abi)"
+  )
   $apk = Join-Path $root 'build\app\outputs\flutter-apk\app-release.apk'
   $out = Join-Path $dest "TBank-v$versionName-android-$($target.Abi).apk"
   Copy-Item $apk $out -Force
@@ -29,8 +48,7 @@ foreach ($target in $targets) {
 }
 
 $env:PATH = "D:\tools\nuget;$env:PATH"
-& flutter build windows --release
-if ($LASTEXITCODE -ne 0) { throw 'Windows 构建失败' }
+Invoke-Flutter @('build', 'windows', '--release')
 $winDir = Join-Path $root 'build\windows\x64\runner\Release'
 $winZip = Join-Path $dest "TBank-v$versionName-windows-x64.zip"
 Compress-Archive -Path "$winDir\*" -DestinationPath $winZip -CompressionLevel Optimal -Force
